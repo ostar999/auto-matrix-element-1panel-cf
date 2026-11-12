@@ -161,10 +161,20 @@ ask() { # ask VAR "提示" "默认值"
   printf -v "$__var" '%s' "${__ans:-$__def}"
 }
 
-ask_secret() { # ask_secret VAR "提示"
-  local __var=$1 __q=$2 __ans=""
+ask_secret() { # ask_secret VAR "提示" —— 输入时每个字符显示为 *
+  local __var=$1 __q=$2 __ans="" __ch=""
   if (( NON_INTERACTIVE )); then return 0; fi
-  read -r -s -p "  ? $__q: " __ans || true
+  printf '  ? %s: ' "$__q"
+  while IFS= read -rsn1 __ch; do
+    case $__ch in
+      "")            break ;;                       # 回车
+      $'\x7f'|$'\b')                                  # 退格
+        if [[ -n $__ans ]]; then __ans=${__ans%?}; printf '\b \b'; fi ;;
+      $'\x03')       printf '\n'; return 1 ;;          # Ctrl-C
+      $'\x15')       while [[ -n $__ans ]]; do __ans=${__ans%?}; printf '\b \b'; done ;;  # Ctrl-U 清空
+      *)             __ans+=$__ch; printf '*' ;;
+    esac
+  done
   printf '\n'
   printf -v "$__var" '%s' "$__ans"
 }
