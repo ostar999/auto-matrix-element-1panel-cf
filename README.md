@@ -799,6 +799,183 @@ acme.sh 已自动加 cron。**1Panel 模式下**，续期后需要把新证书�
 
 ## 8. 附录：为什么用 Let's Encrypt，不用 Cloudflare 的证书
 
+在回答这个问题之前，先把「证书到底是怎么签出来的」讲清楚——
+理解了原理，后面「为什么必须是公共 CA」就顺理成章了。
+
+### 8.0 证书是怎么签出来的（原理）
+
+#### 8.0.1 HTTPS 要解决两件事
+
+```
+① 加密     让中间人看不懂内容          →  靠密钥交换
+② 身份     「对面真的是 chat.xxx 吗」    →  靠证书
+```
+
+第一件好办，双方临时协商密钥就行。**难的是第二件**——你怎么证明自己不是冒充者？
+
+#### 8.0.2 证书的本质：一个受信任的第三方签名
+
+浏览器出厂时就内置了一份**根证书列表**（Mozilla/微软/苹果维护），里面存着几十个 CA 的公钥。
+判断逻辑是：
+
+```
+服务器出示证书
+    ↓
+证书上写着「我是 chat.xxx，由 XXX CA 签名」
+    ↓
+浏览器用内置的 CA 公钥验证这个签名
+    ↓
+签名对 → 相信这确实是 chat.xxx 的服务器
+签名错 / CA 不在列表 → 红色警告
+```
+
+所以**自签名证书一定报错**：它自己给自己签名，不在任何浏览器的信任列表里。
+
+#### 8.0.3 ACME 协议：CA 怎么确认你是域名主人
+
+CA 看不见你的服务器。它只能用一个办法：**让你在一个"只有域名控制者才能改的地方"放一个随机值**。
+
+这就是 ACME 协议的核心，有三种放法：
+
+| 挑战方式 | 放哪 | CA 怎么查 | 需要什么 |
+|---|---|---|---|
+| **HTTP-01** | `http://域名/.well-known/acme-challenge/<token>` | 发 HTTP 请求去取 | **入站 80 端口可达** |
+| **DNS-01** | `_acme-challenge.域名` 的 TXT 记录 | 查 DNS | 能改 DNS 记录的 API |
+| TLS-ALPN-01 | 443 端口上的特殊 ALPN 握手 | 建 TLS 连接 | 入站 443 可达 |
+
+这个值不是随便填的，它是：
+
+```
+token        = CA 给的随机串
+thumbprint   = 你的账户公钥的 SHA-256
+keyAuth      = token + "." + thumbprint
+TXT 记录值    = base64url(SHA-256(keyAuth))
+```
+
+CA 自己算一遍，和 DNS 里查到的一致，就说明「这个账户确实控制这个域名」。
+
+#### 8.0.4 我们为什么选 DNS-01
+
+| 维度 | HTTP-01 | DNS-01（我们用） |
+|---|---|---|
+| 需要入站端口 | ✅ 需要 80 | ❌ 完全不需要 |
+| 支持通配符 `*.x.com` | ❌ 不支持 | ✅ 支持 |
+| 域名走 Cloudflare 橙云 | 🟡 要额外配置 | ✅ 无所谓 |
+| 服务器被墙/无公网 IP | ❌ 签不了 | ✅ 只要出站能通 |
+
+**最关键的是第一行**：部署时云安全组还没放行 80，用 HTTP-01 会直接失败；
+DNS-01 只用到**出站 HTTPS**，所以端口没开也能签下来。
+
+#### 8.0.5 完整流程（12 步）
+
+以这台服务器为例：
+
+```
+①  脚本读 --cf-token，存进环境变量 CF_Token
+        ↓
+②  没装 acme.sh 就先装（curl get.acme.sh | sh）
+    acme.sh 是一个纯 Shell 写的 ACME 客户端
+        ↓
+③  首次运行会向 Let's Encrypt 注册账户，生成账户密钥
+        ↓
+④  本地生成「证书私钥」和 CSR（证书签名请求）
+    ★ 私钥从生成到落地，全程不出这台服务器
+    CSR 里只有公钥和域名，没有私钥
+        ↓
+⑤  acme.sh 向 LE 下单：
+    「我要给 chat / chatapi / chatad 三个域名签一张证书」
+        ↓
+⑥  LE 返回挑战：请证明你控制这三个域名
+    每条挑战给一个 token
+        ↓
+⑦  acme.sh 用 CF Token 调 Cloudflare API，
+    创建三条 TXT 记录：_acme-challenge.chat.xxx 等
+        ↓
+⑧  轮询公共 DNS，确认 TXT 已生效
+    （Cloudflare API 是秒生效，但权威 DNS 传播需要几秒）
+        ↓
+⑨  通知 LE：「我准备好了，来查吧」
+        ↓
+⑩  LE 从权威 DNS 查这三条 TXT，逐条比对
+        ↓
+⑪  全部通过 → LE 用你提交的 CSR 签出证书
+        ↓
+⑫  acme.sh 下载证书链 → 存到 /root/.acme.sh/
+    → --install-cert 复制到 /etc/nginx/ssl/matrix/
+    → 顺手创建一条 TXT 记录的清理（acme.sh 会自动删）
+```
+
+对应到脚本实际执行的命令：
+
+```bash
+export CF_Token="$CF_TOKEN"
+/root/.acme.sh/acme.sh --issue --dns dns_cf \
+  -d chat.omxyes.cc.cd -d chatapi.omxyes.cc.cd -d chatad.omxyes.cc.cd \
+  --keylength 2048
+
+/root/.acme.sh/acme.sh --install-cert -d chat.omxyes.cc.cd \
+  --key-file /etc/nginx/ssl/matrix/privkey.pem \
+  --fullchain-file /etc/nginx/ssl/matrix/fullchain.pem \
+  --reloadcmd "/opt/matrix/renew-hook.sh"
+```
+
+#### 8.0.6 证书文件里到底有什么
+
+`fullchain.pem` 不是一张证书，是**一串**。这台机器上实测：
+
+```bash
+$ grep -c "BEGIN CERTIFICATE" /etc/nginx/ssl/matrix/fullchain.pem
+3
+```
+
+三张分别是：
+
+```
+① 你的证书
+   subject = CN = chat.omxyes.cc.cd
+   issuer  = Let's Encrypt, CN = YR1        ← 由中间证书签
+
+② 中间证书
+   subject = Let's Encrypt, CN = YR1
+   issuer  = ISRG, CN = Root YR             ← 由根证书签
+
+③ 交叉签名的根（兼容老客户端）
+```
+
+**为什么必须带中间证书**：浏览器只内置根证书，不内置中间证书。
+服务器如果把中间证书落下，链就断了，部分客户端（尤其安卓老版本）会报错。
+所以要用 `fullchain.pem` 而不是只下发叶子证书。
+
+`privkey.pem` 是私钥，**只存在于这台服务器**，`chmod 600` 保护。
+
+#### 8.0.7 为什么有效期只有 90 天
+
+这是 Let's Encrypt 刻意设计的：
+
+- 缩短「私钥泄露后可被滥用」的窗口
+- 强迫所有人做自动化（手动续证书根本撑不住 90 天一轮）
+
+代价是必须自动化，所以配套了：
+
+```
+到期前 30 天开始尝试续期
+每天检查 4 次（03:09 / 09:09 / 15:09 / 21:09）
+= 最多 120 次重试机会
+```
+
+续期成功后触发 `--reloadcmd`，把新证书同步到 1Panel 的三个站点目录并重载 OpenResty（见第 5 节）。
+
+#### 8.0.8 四个常见误解
+
+| 误解 | 事实 |
+|---|---|
+| 「证书是绑 IP 的」 | 绑**域名**。同一 IP 上多个站点靠 SNI 区分 |
+| 「一张证书只能一个域名」 | SAN 字段可以放很多个，我们用一张覆盖 3 个 |
+| 「私钥会传给 CA」 | 不会。只传 CSR（含公钥），私钥永不出服务器 |
+| 「证书过期数据就丢了」 | 不会。只是连不上，数据都在磁盘上 |
+
+---
+
 经常有人问：「Cloudflare 有免费证书，为什么还要折腾 Let's Encrypt？」
 
 因为 **Cloudflare 有两种证书，很多人把它们混成一种**：
