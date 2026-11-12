@@ -690,16 +690,19 @@ bash -c "$(curl -sSL https://raw.githubusercontent.com/ostar999/auto-matrix-elem
 
 ==> Cloudflare API Token
 ? 粘贴 Cloudflare API Token（输入时不显示）: ********
-   ← 第一次跑必填；输入时看不见，正常
+   ← 第一次跑必填；输入时每个字符显示为 *，退格可删
 
 ==> 管理员
 ? 管理员用户名 [ostar]:
-? 管理员密码: ********      ← 输入时看不见，正常
+? 管理员密码: ********      ← 每敲一个字符显示一个 *
 ```
 
 > **Token 这一项是必填的**（除非加 `--skip-dns`）。
 > 不填会导致建不了 DNS 记录、后面证书也签不出来。
 
+> 密码和 Token 这类敏感输入，**每敲一个字符显示一个 `*`**：
+> 退格删一个，`Ctrl-U` 全部清空，`Ctrl-C` 放弃退出。
+>
 每一项的含义：
 
 | 问题 | 默认 | 说明 |
