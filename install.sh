@@ -194,7 +194,7 @@ fetch_templates() {
   local tgz="$TEMPLATE_CACHE/src.tgz"
   dim "下载 $url"
   curl -fsSL --max-time 90 "$url" -o "$tgz" \
-    || die "模板下载失败。可改用：git clone https://github.com/$REPO.git && cd auto-matrix-sh && sudo bash install.sh"
+    || die "模板下载失败。可改用：git clone https://github.com/$REPO.git && cd auto-matrix-sh && sudo bash install.sh&& cd auto-matrix-sh && sudo bash install.sh cd auto-matrix-element-1panel-cf && sudo bash install.sh"
   tar xzf "$tgz" -C "$TEMPLATE_CACHE" --strip-components=1 \
     || die "模板解压失败"
   rm -f "$tgz"
