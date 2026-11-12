@@ -709,6 +709,62 @@ HOOK
   chmod 755 "$pdir/ssl-sync-hook.sh"
   ok "续期钩子已生成: $pdir/ssl-sync-hook.sh"
 
+  # ③ 三个 nginx 片段一键写入（站点建好后执行）
+  cat > "$pdir/apply-snippets.sh" <<'SNIP'
+#!/bin/bash
+# 用法（站点建好之后执行一次）：bash /opt/matrix/panel-cert/apply-snippets.sh
+set -e
+WEB=__WEB__
+API=__API__
+BASE=/opt/1panel/www/sites
+[ -d "$BASE/$WEB" ] || { echo "找不到站点目录 $BASE/$WEB，请先在面板建好三个站点"; exit 1; }
+[ -d "$BASE/$API" ] || { echo "找不到站点目录 $BASE/$API，请先在面板建好三个站点"; exit 1; }
+
+cat > "$BASE/$WEB/proxy/zz-wellknown.conf" <<EOS
+location = /.well-known/matrix/client {
+    default_type application/json;
+    add_header Access-Control-Allow-Origin "*" always;
+    return 200 '{"m.homeserver":{"base_url":"https://__APIFQDN__"}}';
+}
+location = /.well-known/matrix/server {
+    default_type application/json;
+    add_header Access-Control-Allow-Origin "*" always;
+    return 200 '{"m.server":"__APIFQDN__:443"}';
+}
+EOS
+
+cat > "$BASE/$API/proxy/zz-upload.conf" <<'EOS'
+client_max_body_size 0;
+proxy_request_buffering off;
+EOS
+
+cat > "$BASE/$API/proxy/zz-livekit.conf" <<'EOS'
+location /livekit/sfu/ {
+    proxy_pass http://127.0.0.1:7880/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_read_timeout 3600s;
+    proxy_buffering off;
+}
+location /livekit/jwt/ {
+    proxy_pass http://127.0.0.1:8080/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+}
+EOS
+
+ct=$(docker ps --format '{{.Names}}' | grep -i openresty | head -1)
+if [ -n "$ct" ]; then
+  docker exec "$ct" openresty -t && docker exec "$ct" openresty -s reload
+fi
+echo "✓ 三个片段已写入并重载 OpenResty"
+SNIP
+  sed -i "s/__WEB__/$WEB_HOST/; s/__API__/$API_HOST/; s/__APIFQDN__/$API_FQDN/" "$pdir/apply-snippets.sh"
+  chmod 755 "$pdir/apply-snippets.sh"
+  ok "nginx 片段脚本已生成: $pdir/apply-snippets.sh"
+
   cat <<EOF
 
   ${c_yel}证书由 1Panel 管理（默认模式）${c_reset}
