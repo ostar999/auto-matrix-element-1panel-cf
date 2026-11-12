@@ -366,7 +366,15 @@ bash -c "$(curl -sSL https://resource.fit2cloud.com/1panel/package/v2/quick_star
 
 **文件位置**：`/opt/1panel/www/sites/chatapi/proxy/root.conf`
 
-把内容替换成（把 `chatapi.example.com` 换成你的域名）：
+> `chatapi` 是**站点代号**（创建站点时填的那个），对应你在 1Panel 里
+> 域名为 `chatapi.example.com` 的那个站点。代号不同，路径里的目录名就不同。
+
+把整个文件的内容替换成下面这段：
+
+> 📌 **这段里没有域名，不用替换任何东西**。
+> 域名写在 1Panel 生成的 `/opt/1panel/www/conf.d/chatapi.conf` 里，
+> 这里只写路径规则和上游地址；端口和脚本默认值一致（7880/8080/9108），
+> 除非你用 `--dir` 或改过 compose，否则原样粘贴即可。
 
 ```nginx
 # LiveKit 信令 WebSocket（路径前缀必须剥掉）
@@ -410,6 +418,16 @@ location ^~ / {
 > ⚠️ 在 1Panel 界面里改这个站点的「反向代理」，`root.conf` 会被重新生成，
 > **上面这些会全部丢失**。改完界面记得回填。
 
+**改完立刻验证**（返回 200 说明 LiveKit 路径通了）：
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://chatapi.example.com/livekit/jwt/healthz
+curl -s -o /dev/null -w '%{http_code}\n' https://chatapi.example.com/_matrix/client/versions
+```
+
+两个都返回 200 才算配置正确。如果第一个 404，说明 `/livekit/jwt/` 那段没生效
+（检查 `proxy_pass` 结尾有没有斜杠、文件有没有被面板重置）。
+
 ### 3.8 给网页站点加客户端发现
 
 新建一个**新文件**（不要改 `root.conf`，这个文件不会被面板覆盖）：
@@ -431,7 +449,10 @@ location = /.well-known/matrix/server {
 }
 ```
 
-`chatapi.example.com` 换成你的 API 域名。
+把代码里出现 `chatapi.example.com` 的**两处**都换成你的 API 域名：
+
+- `"base_url":"https://chatapi.example.com"` —— Element 登录时连的地址
+- `"m.server":"chatapi.example.com:443"` —— 联邦委派，lk-jwt 校验身份时读
 
 > 没有这一段，Element 登录会一直转圈，手机端通话也会失败
 > （lk-jwt 校验身份时要读 `.well-known/matrix/server`）。
