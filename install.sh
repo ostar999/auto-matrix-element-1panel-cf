@@ -165,6 +165,9 @@ ask_secret() { # ask_secret VAR "提示" —— 输入时每个字符显示为 *
   local __var=$1 __q=$2 __ans="" __ch=""
   if (( NON_INTERACTIVE )); then return 0; fi
   printf '  ? %s: ' "$__q"
+  local __stty_saved
+  __stty_saved=$(stty -g 2>/dev/null || true)
+  stty -echo 2>/dev/null || true          # 整个读取期间关闭回显，避免字符漏出
   while IFS= read -rsn1 __ch; do
     case $__ch in
       "")            break ;;                       # 回车
@@ -175,6 +178,7 @@ ask_secret() { # ask_secret VAR "提示" —— 输入时每个字符显示为 *
       *)             __ans+=$__ch; printf '*' ;;
     esac
   done
+  [[ -n $__stty_saved ]] && stty "$__stty_saved" 2>/dev/null || stty echo 2>/dev/null || true
   printf '\n'
   # 去掉粘贴时可能混进来的终端转义序列（括号粘贴标记等）
   __ans=$(printf '%s' "$__ans" | sed -e 's/\x1b\[[0-9;]*[a-zA-Z~]//g' -e 's/\x1b\][^\x07]*\x07//g' -e 's/[[:cntrl:]]//g')
