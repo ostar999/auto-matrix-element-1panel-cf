@@ -56,6 +56,7 @@ PROXY_WEB=1
 PROXY_ADMIN=1
 PUBLIC_IP_OVERRIDE=""
 STAGING=0
+CERT_MODE="panel"
 PANEL_MODE="auto"
 PANEL_API_KEY=""
 
@@ -99,6 +100,7 @@ Matrix 全栈部署 v$SCRIPT_VERSION
   --max-upload SIZE      单文件上限，默认 2G
   --panel MODE           网站由谁托管: auto|1panel|standalone（默认 auto）
   --panel-api-key KEY    1Panel API Key，提供后可尝试自动建站（v2）
+  --cert-mode MODE       证书由谁管理: panel|acme（默认 panel）
   --staging              用 Let's Encrypt 测试环境（不限次数，但浏览器不信任）
   --skip-dns             不自动创建 DNS 记录
   --skip-rtc             不部署 LiveKit / coturn（只做聊天）
@@ -133,6 +135,7 @@ parse_args() {
       --max-upload)    MAX_UPLOAD_SIZE="${2:?}"; shift 2 ;;
       --panel)         PANEL_MODE="${2:?}"; shift 2 ;;
       --panel-api-key) PANEL_API_KEY="${2:?}"; shift 2 ;;
+      --cert-mode)     CERT_MODE="${2:?}"; shift 2 ;;
       --staging)       STAGING=1; shift ;;
       --skip-dns)      SKIP_DNS=1; shift ;;
       --skip-rtc)      SKIP_RTC=1; shift ;;
@@ -570,6 +573,10 @@ enable_registration_without_verification: true"
   subst "$TEMPLATE_DIR/nginx-api.conf.tmpl"           "$INSTALL_DIR/nginx/$API_FQDN.conf"
   subst "$TEMPLATE_DIR/nginx-admin.conf.tmpl"         "$INSTALL_DIR/nginx/$ADMIN_FQDN.conf"
 
+  if [[ $CERT_MODE == panel && $PANEL_MODE == 1panel ]]; then
+    panel_cert_setup
+  fi
+
   chmod 644 "$INSTALL_DIR"/synapse/homeserver.yaml "$INSTALL_DIR"/element/config.json \
             "$INSTALL_DIR"/livekit/*.yaml "$INSTALL_DIR"/coturn/turnserver.conf
   chown -R 991:991 "$INSTALL_DIR/data/synapse"
@@ -661,6 +668,72 @@ install_1panel() {
   die "初始化 1Panel 后，重新运行本脚本（它会自动识别 1Panel 管理）"
 }
 
+
+# ---------------------------------------------------------------- 面板管证书
+panel_cert_setup() {
+  local pdir="$INSTALL_DIR/panel-cert"
+  mkdir -p "$pdir"
+
+  # ① 占位自签证书：让站点能先开启 HTTPS，从而把 nginx 指向 sites/<代号>/ssl/
+  if [[ ! -f $pdir/placeholder.crt ]]; then
+    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+      -subj "/CN=$WEB_FQDN" \
+      -addext "subjectAltName=DNS:$WEB_FQDN,DNS:$API_FQDN,DNS:$ADMIN_FQDN" \
+      -keyout "$pdir/placeholder.key" -out "$pdir/placeholder.crt" >/dev/null 2>&1 \
+      && ok "占位自签证书已生成: $pdir/placeholder.crt" \
+      || warn "占位证书生成失败，可跳过（用任意证书先开 HTTPS 也行）"
+  fi
+
+  # ② 续期钩子：把证书复制到三个站点 + 重载 OpenResty
+  cat > "$pdir/ssl-sync-hook.sh" <<HOOK
+#!/bin/bash
+# 1Panel 证书签发/续期后自动执行
+# 用法：面板申请证书时勾选「申请证书之后执行脚本」，把本文件内容粘进去
+SRC="$pdir/live"
+SRC=/opt/1panel/www/sites/$WEB_HOST/ssl
+for d in $API_HOST $ADMIN_HOST; do
+  dst="/opt/1panel/www/sites/\$d/ssl"
+  [ -d "\$dst" ] || continue
+  cp "\$SRC/fullchain.pem" "\$dst/fullchain.pem" 2>/dev/null || true
+  cp "\$SRC/privkey.pem"   "\$dst/privkey.pem"   2>/dev/null || true
+done
+ct=\$(docker ps --format '{{.Names}}' | grep -i openresty | head -1)
+if [ -n "\$ct" ]; then
+  docker exec "\$ct" openresty -t >/dev/null 2>&1 && docker exec "\$ct" openresty -s reload
+fi
+echo "\$(date -Is) ssl-sync-hook done" >> /var/log/ssl-sync-hook.log
+HOOK
+  chmod 755 "$pdir/ssl-sync-hook.sh"
+  ok "续期钩子已生成: $pdir/ssl-sync-hook.sh"
+
+  cat <<EOF
+
+  ${c_yel}证书由 1Panel 管理（默认模式）${c_reset}
+
+  ① 面板建 3 个站点（反向代理，见上）后，先上传一张「占位证书」：
+     证书 → 上传证书
+       名称   placeholder
+       证书   $pdir/placeholder.crt
+       私钥   $pdir/placeholder.key
+     三个站点 → 配置 → HTTPS → 打开 → 选 placeholder → 保存
+     （这一步只会让 nginx 指向 /www/sites/<代号>/ssl/，稍后会被正式证书覆盖）
+
+  ② 面板申请正式证书：
+     证书 → 申请证书
+       主域名   $WEB_FQDN
+       其他域名 $API_FQDN, $ADMIN_FQDN
+       DNS 账号 你创建的 Cloudflare 账户
+       自动续签 ✅
+       推送证书到本地目录 ✅ → /opt/1panel/www/sites/$WEB_HOST/ssl
+       申请证书之后执行脚本 ✅ → 把 $pdir/ssl-sync-hook.sh 的内容粘进去
+
+  ③ 点「确认」。面板会：签发 → 推送覆盖 → 执行脚本 → 三个站点自动生效
+
+  之后每次续期都走同一条链路，无需人工干预。
+
+EOF
+}
+
 panel_prepare() {
   step "1Panel 模式准备"
 
@@ -675,6 +748,7 @@ panel_prepare() {
 
   ok "1Panel OpenResty 就绪"
   dim "站点配置已生成在 $INSTALL_DIR/nginx/"
+
 
   cat > "$INSTALL_DIR/renew-hook.sh" <<'HOOK'
 #!/bin/bash
@@ -1028,6 +1102,8 @@ main() {
   else
     choose_panel_mode
   fi
+  case $CERT_MODE in panel|acme) ;; *) die "未知的 --cert-mode 值: $CERT_MODE（panel|acme）" ;; esac
+
   case $PANEL_MODE in
     install-1panel) (( DRY_RUN )) || install_1panel ;;
     1panel)         : ;;  # 等配置渲染完再检查并打印清单
@@ -1049,7 +1125,20 @@ main() {
   fi
 
   start_stack
-  issue_cert
+
+  # 证书模式：standalone 只能用 acme；panel 模式下由面板负责
+  if [[ $PANEL_MODE == standalone && $CERT_MODE == panel ]]; then
+    CERT_MODE=acme
+  fi
+
+  if [[ $CERT_MODE == acme ]]; then
+    issue_cert
+  else
+    step "证书"
+    ok "证书由 1Panel 管理，跳过 acme.sh 签发"
+    dim "按上面的步骤在面板里申请即可，续期全自动"
+  fi
+
   if [[ $PANEL_MODE == standalone ]]; then
     setup_nginx
   fi
