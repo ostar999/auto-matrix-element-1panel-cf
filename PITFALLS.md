@@ -284,7 +284,18 @@ ct=$(docker ps --format '{{.Names}}' | grep -i openresty | head -1)
 docker exec "$ct" openresty -t && docker exec "$ct" openresty -s reload
 ```
 
-**实测结果（1Panel 2.5.0）**：
+**三站点端到端实测（1Panel 2.5.0）**：
+
+```
+续期触发后，三个站点同时变成同一张新证书：
+  lab      05BB9AADCBEB4EE9E952553CC61B636FCE95
+  labapi   05BB9AADCBEB4EE9E952553CC61B636FCE95
+  labad    05BB9AADCBEB4EE9E952553CC61B636FCE95
+面板日志：证书推送到目录 … 成功 → 开始执行脚本 → reload 成功
+全程无人工 reload / 无人工复制
+```
+
+**单站点实测（1Panel 2.5.0）**：
 
 | 步骤 | 结果 |
 |---|---|
