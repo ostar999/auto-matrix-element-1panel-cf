@@ -572,17 +572,45 @@ location = /.well-known/matrix/server {
 bash -c "$(curl -sSL https://raw.githubusercontent.com/ostar999/auto-matrix-element-1panel-cf/main/install.sh)"
 ```
 
-全交互，会依次问你：
+全交互，会依次问你（**全部回车即用默认**）：
 
 ```
+==> 基本参数
 ? 主域名: example.com
 ? 网页前缀（用户 ID 会用这个）[chat]:
 ? API 前缀 [chatapi]:
 ? 管理后台前缀 [chatad]:
+
+==> 可选设置
+? 站点名称 / 品牌 [Matrix Chat]:
+? 单文件上传上限 [2G]:
+? 联邦模式 closed/whitelist/open [closed]:
+? 允许任何人注册 [n]:
+? 允许游客浏览房间 [n]:
+? 默认界面语言 [zh_Hans]:
+? 默认主题 light/dark [light]:
+? 启用音视频通话 [Y]:
+
+==> 面板
+? 检测到 1Panel，网站是否交给它管理? [y]:
+
+==> 管理员
 ? 管理员用户名 [ostar]:
-? 管理员密码: ********
-? 检测到 1Panel，网站是否交给 1Panel 管理? [y]:
+? 管理员密码: ********      ← 输入时看不见，正常
 ```
+
+每一项的含义：
+
+| 问题 | 默认 | 说明 |
+|---|---|---|
+| 站点名称 / 品牌 | `Matrix Chat` | Element 顶部显示的名字 |
+| 单文件上传上限 | `2G` | 填 `0` 表示不限；100M/500M/2G/10G 都可以 |
+| 联邦模式 | `closed` | `closed` 只本机互通；`whitelist` 指定域名；`open` 加入公共网络 |
+| 允许任何人注册 | `n` | 开了容易被扫描器批量注册 |
+| 允许游客浏览房间 | `n` | 无账号可看被标记为公开的房间 |
+| 默认界面语言 | `zh_Hans` | `en` 等 |
+| 默认主题 | `light` | `light` / `dark` |
+| 启用音视频通话 | `Y` | 选 `n` 就不装 LiveKit 和 coturn |
 
 ### 4.2 带参数（半自动）
 
@@ -593,6 +621,18 @@ bash -c "$(curl -sSL .../install.sh)" _ \
   --cf-token "cfut_xxxxxxxx" \
   --admin-pass "你的密码" \
   --panel 1panel
+```
+
+想自定义这些「可选设置」，追加对应参数即可：
+
+```bash
+  --brand "我们公司的聊天" \
+  --max-upload 500M \
+  --federation whitelist --federation-domains "partner.com" \
+  --allow-registration \
+  --allow-guests \
+  --language en \
+  --theme dark
 ```
 
 ### 4.3 先看一眼会生成什么
@@ -645,6 +685,39 @@ sudo bash install.sh
 2. 面板内「服务器地址」填 `https://chatapi.example.com`
 3. 用 Matrix 管理员账号登录
 
+### 查看本次安装用的参数
+
+脚本会把所有有效参数写进一个文件：
+
+```bash
+cat /opt/matrix/install-manifest.json
+```
+
+```json
+{
+  "version": "1.2.0",
+  "installed_at": "2026-11-12T15:30:00+08:00",
+  "domain": "example.com",
+  "web_host": "chat",
+  "api_host": "chatapi",
+  "admin_host": "chatad",
+  "brand": "Matrix Chat",
+  "max_upload_size": "2G",
+  "federation": "closed",
+  "federation_domains": "",
+  "allow_registration": false,
+  "allow_guests": false,
+  "language": "zh_Hans",
+  "theme": "light",
+  "panel_mode": "1panel",
+  "rtc": true,
+  "admin_user": "ostar",
+  "install_dir": "/opt/matrix"
+}
+```
+
+排查「是不是当初配错了」时，先看这个文件，不用翻 YAML。
+
 ### 常用运维
 
 ```bash
@@ -689,7 +762,13 @@ acme.sh 已自动加 cron。**1Panel 模式下**，续期后需要把新证书�
 | `--email` | 证书邮箱 | `admin@<domain>` |
 | `--brand` | Element 显示名 | `Matrix Chat` |
 | `--dir` | 安装目录 | `/opt/matrix` |
-| `--max-upload` | 单文件上限 | `2G` |
+| `--max-upload` | 单文件上限（`0` = 不限） | `2G` |
+| `--federation` | `closed` / `whitelist` / `open` | `closed` |
+| `--federation-domains` | 白名单域名，逗号分隔 | — |
+| `--allow-registration` | 开放注册 | 关闭 |
+| `--allow-guests` | 允许游客浏览 | 关闭 |
+| `--language` | 默认界面语言 | `zh_Hans` |
+| `--theme` | 默认主题 `light`/`dark` | `light` |
 | `--panel` | `auto` / `1panel` / `standalone` | `auto` |
 | `--skip-dns` | 不建 DNS 记录 | — |
 | `--skip-rtc` | 不装 LiveKit/coturn | — |
