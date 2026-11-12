@@ -260,6 +260,51 @@ provider = 'manual'       →  站点下拉【显示】
 ① 面板签发一张 → ② 看站点 HTTPS 的证书下拉有没有 → ③ 有 = 已修复
 ```
 
+### 4.1c 【解法】让 1Panel 真正接管证书：推送目录 + 执行脚本
+
+**问题回顾**：面板签发的证书在站点下拉里选不到（`provider=dnsAccount` 被过滤）。
+
+**绕过办法**：不用"绑定"，直接把证书写成站点正在读的文件。
+
+```
+申请证书时：
+  勾「推送证书到本地目录」→ /opt/1panel/www/sites/<代号>/ssl
+  勾「申请证书之后执行脚本」→ reload 命令
+```
+
+执行脚本内容（多站点时补上复制）：
+
+```bash
+SRC=/opt/1panel/www/sites/chat/ssl
+for d in chatapi chatad; do
+  cp "$SRC/fullchain.pem" "/opt/1panel/www/sites/$d/ssl/fullchain.pem"
+  cp "$SRC/privkey.pem"   "/opt/1panel/www/sites/$d/ssl/privkey.pem"
+done
+ct=$(docker ps --format '{{.Names}}' | grep -i openresty | head -1)
+docker exec "$ct" openresty -t && docker exec "$ct" openresty -s reload
+```
+
+**实测结果（1Panel 2.5.0）**：
+
+| 步骤 | 结果 |
+|---|---|
+| 签发 → 推送目录 | ✅ 文件被覆盖（序列号变化） |
+| 不 reload | 站点仍用旧证书 |
+| 加钩子后再续签 | ✅ 站点自动用上新证书，HTTPS 200 |
+
+面板日志会完整记录：`证书推送到目录 … 成功` → `开始执行脚本` → reload 成功。
+
+**与下拉绑定的对比**：
+
+| | 下拉绑定 | 推送 + 钩子 |
+|---|---|---|
+| 面板签发/续期 | ✅ | ✅ |
+| 站点生效 | ❌ | ✅ |
+| 首次人工 | 绑不上 | 配一次推送目录和脚本 |
+
+> 注意：推送目录**必须**是站点正在使用的那个 ssl 目录（看 `conf.d/<代号>.conf` 里的 `ssl_certificate`），
+> 填错目录只是把文件写到别处，站点不会变。
+
 ### 4.2 通配符证书不覆盖三级子域
 
 `*.example.com` **不覆盖** `livekit.im.example.com`（通配符只匹配一级）。

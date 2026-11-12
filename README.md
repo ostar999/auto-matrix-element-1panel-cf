@@ -1118,6 +1118,41 @@ chatapi        →  Let's Encrypt
 > 顺带纠正一个常见误解：1Panel 的证书**本来就不落盘**，
 > 内容存在数据库里，只有绑定站点或勾选「推送目录」时才写成文件。
 
+### 8.3c 让 1Panel 接管证书的正确姿势（实测可行）
+
+第 8.3b 说的限制是「站点下拉选不到面板证书」。这不代表 1Panel 管不了证书——
+换一条路就能端到端跑通：**推送目录 + 执行脚本**。
+
+申请证书时：
+
+| 选项 | 填什么 |
+|---|---|
+| 推送证书到本地目录 | `/opt/1panel/www/sites/<代号>/ssl`（**站点正在用的那个目录**） |
+| 申请证书之后执行脚本 | reload 命令（见下） |
+
+```bash
+SRC=/opt/1panel/www/sites/chat/ssl
+for d in chatapi chatad; do
+  cp "$SRC/fullchain.pem" "/opt/1panel/www/sites/$d/ssl/fullchain.pem"
+  cp "$SRC/privkey.pem"   "/opt/1panel/www/sites/$d/ssl/privkey.pem"
+done
+ct=$(docker ps --format '{{.Names}}' | grep -i openresty | head -1)
+docker exec "$ct" openresty -t && docker exec "$ct" openresty -s reload
+```
+
+实测（2.5.0）：签发 → 推送覆盖文件 → 脚本 reload → 站点自动用上新证书，HTTPS 200。
+续期走同一条链路，同样自动生效。
+
+| | 站点下拉绑定 | 推送目录 + 钩子 |
+|---|---|---|
+| 面板签发 | ✅ | ✅ |
+| 自动续期 | ✅ | ✅ |
+| 站点生效 | ❌ | ✅ |
+| 首次人工 | 绑不上 | 配置一次 |
+
+> 本站脚本默认仍用 acme.sh（全自动、零人工）。要用面板管证书，按上面配一次即可，
+> 之后续期全自动。两种方式不要同时启用，否则会撞 Let's Encrypt 的签发限额。
+
 ### 8.4 什么情况下 Cloudflare 证书才合适
 
 全部流量都走橙云的普通网站——浏览器根本看不到源站证书，用 15 年的确实省事。
