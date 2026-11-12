@@ -176,6 +176,8 @@ ask_secret() { # ask_secret VAR "提示" —— 输入时每个字符显示为 *
     esac
   done
   printf '\n'
+  # 去掉粘贴时可能混进来的终端转义序列（括号粘贴标记等）
+  __ans=$(printf '%s' "$__ans" | sed -e 's/\x1b\[[0-9;]*[a-zA-Z~]//g' -e 's/\x1b\][^\x07]*\x07//g' -e 's/[[:cntrl:]]//g')
   printf -v "$__var" '%s' "$__ans"
 }
 
