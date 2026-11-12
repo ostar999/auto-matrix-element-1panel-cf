@@ -34,20 +34,40 @@
 | 系统 | Ubuntu 20.04+ / Debian 11+，root 权限 |
 | 域名 | 一个域名，NS 托管在 **Cloudflare** |
 | CF Token | 需要 `Zone→DNS→Edit` + `Zone→Zone→Read` 两项权限 |
-| 端口 | 云厂商安全组必须放行 80、443 以及通话用的 UDP 段 |
+| 端口 | 云厂商安全组必须放行 80、443 以及通话用的 UDP 段（见 2.1） |
 | 磁盘 | 建议 ≥ 20GB；单文件上限默认 2G |
 
-> ⚠️ **最常见的失败原因**：VPS 默认只开放 SSH 端口，80/443 被上层防火墙挡住。
-> 部署完成后如果公网访问返回 522/超时，先到服务器控制台放行端口。
+> ⚠️ **最常见的失败原因**：VPS 默认只开放 SSH 端口，80/443 被**服务商安全组**挡住。
+> 判断方法：`ufw status` 显示已放行、但 `tcpdump` 在服务器上抓不到任何包
+> → 拦截在服务商网络层。部署完成后如果公网返回 522/超时，先去控制台放行：
+>
+> ```
+> TCP 80, 443, 7881, 3478
+> UDP 3478, 49160-49200, 50000-50100
+> ```
+>
+> 具体到 某云厂商：产品详情 → 安全组 → 管理 → 添加（详见 PITFALLS 6.2）。
 
 ## 三、快速开始
 
-### 3.1 上传脚本
+### 3.1 一条命令（不用 clone）
+
+在服务器上以 root 运行：
 
 ```bash
-scp -r 3-auto-matrix-sh root@你的服务器:/root/auto-matrix
-ssh root@你的服务器
-cd /root/auto-matrix
+bash -c "$(curl -sSL https://raw.githubusercontent.com/ostar999/auto-matrix-element-1panel-cf/main/install.sh)" _ --domain example.com
+```
+
+- 脚本会自动下载模板到 `/tmp/auto-matrix-sh/`
+- `_` 后面的内容原样传给脚本（当作命令行参数）
+- 不给参数就是全交互模式：`bash -c "$(curl -sSL .../install.sh)"`
+
+### 3.1b 或者 clone 下来跑
+
+```bash
+git clone https://github.com/ostar999/auto-matrix-element-1panel-cf.git
+cd auto-matrix-sh
+sudo bash install.sh
 ```
 
 ### 3.2 交互式运行（推荐第一次用）
@@ -89,6 +109,57 @@ bash install.sh --dry-run --skip-dns --non-interactive \
 # 配置会渲染到 /opt/matrix，但不启动任何服务
 ```
 
+## 三·五、网站由谁托管（重要）
+
+脚本会先判断这台机器上有没有 1Panel，再决定网站交给谁：
+
+| 模式 | 触发条件 | 80/443 归谁 | 1Panel 里能看到站点吗 |
+| --- | --- | --- | --- |
+| `standalone` | 没有 1Panel | 脚本装的 nginx | ❌ 看不到 |
+| `1panel` | 装了 1Panel | 1Panel 的 OpenResty | ✅ 能看到、能管理 |
+| `install-1panel` | 想装 1Panel | 装完由你初始化 | ✅ |
+
+选择逻辑：
+
+```bash
+# 交互式：检测到 1Panel 会问你要不要用它管理
+bash install.sh
+
+# 显式指定
+bash install.sh --panel 1panel      # 用 1Panel 管理
+bash install.sh --panel standalone  # 用独立 nginx
+```
+
+**1Panel 模式做什么 / 不做什么**
+
+- ✅ 起容器、建 DNS、签证书、建管理员
+- ✅ 把三个站点的 nginx 片段生成到 `/opt/matrix/nginx/`
+- ❌ 不装宿主机 nginx（避免和 1Panel 抢 80/443）
+- ⏸ 最后会打印「在 1Panel 里建 3 个站点」的步骤，由你点 3 次完成
+
+**1Panel 模式建完站后，还要做三件事**（脚本会打印清单）：
+
+1. 证书上传后，各站点 HTTPS 开关打开；
+2. API 站点补 `/livekit/sfu/`、`/livekit/jwt/` 和 `client_max_body_size 0`；
+3. 后台站点开「密码访问」，否则面板裸奔。
+
+续期钩子 `renew-hook.sh` 会自动生成，把 acme.sh 的 reloadcmd 指向它即可。
+
+> 为什么不能全自动？1Panel 的站点记录在它自己的数据库里，
+> API Key 在库里是加密存储的（`api_keys.secret_ciphertext`），
+> 脚本无法自行生成或读取。所以 1Panel 模式做成「半自动」：
+> 脚本把该准备的都准备好，你在面板里点三下即可。
+
+**从 standalone 切到 1panel**
+
+```bash
+systemctl disable --now nginx      # 让出 80/443
+# 1Panel 应用商店装 OpenResty
+bash install.sh --panel 1panel     # 重新跑一遍
+```
+
+数据卷不会丢，容器会自动重建。
+
 ## 四、参数
 
 | 参数 | 说明 | 默认 |
@@ -105,6 +176,8 @@ bash install.sh --dry-run --skip-dns --non-interactive \
 | `--dir` | 安装目录 | `/opt/matrix` |
 | `--max-upload` | 单文件上限 | `2G` |
 | `--ip` | 公网 IP | 自动探测 |
+| `--panel` | `auto` / `1panel` / `standalone` | `auto` |
+| `--panel-api-key` | 1Panel API Key（预留，暂未用于自动建站） | — |
 | `--skip-dns` | 不建 DNS 记录 | — |
 | `--skip-rtc` | 不装 LiveKit/coturn | — |
 | `--no-proxy-web` | 网页域名也不走 CF 代理 | — |

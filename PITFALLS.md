@@ -319,7 +319,55 @@ issue_cert       # 此时 nginx 已存在，reload 不会失败
 setup_nginx      # 写站点配置 + reload
 ```
 
-### 5.5 1Panel 的 conf.d 会被面板覆盖
+### 5.5 宿主机 nginx 和 1Panel 抢 80/443
+
+**现象**：装完脚本后打开 1Panel → 网站，顶部提示
+
+```
+未检测到 OpenResty，请进入应用商店点击安装！
+```
+
+**原因**：脚本为了通用性在宿主机 `apt install nginx`，它占着 80/443。
+1Panel 的站点管理依赖它自己的 OpenResty（容器，host 网络），抢不到端口，
+于是 1Panel 认为 OpenResty 没装，网站功能完全不可用。
+
+**教训**：一台机器上「宿主机 nginx」和「1Panel OpenResty」只能留一个。
+
+**修复**：脚本新增 `--panel` 参数：
+
+```bash
+bash install.sh --panel 1panel      # 不装宿主机 nginx，交给 1Panel
+bash install.sh --panel standalone  # 现状，独立 nginx
+```
+
+1Panel 模式下脚本只准备到「片段已生成」，最后三步在面板里点：
+建站点 → 传证书 → 开 HTTPS。
+
+**为什么不能全自动**：1Panel 的站点存在它自己的库里，API Key 在
+`core.db` 的 `api_keys.secret_ciphertext` 中是加密的，脚本既读不到也造不出。
+
+### 5.6 1Panel 的站点结构（实测）
+
+1Panel 每个站点拆成两部分：
+
+```
+/opt/1panel/www/conf.d/<代号>.conf           server 块，末尾 include proxy/*.conf
+/opt/1panel/www/sites/<代号>/proxy/root.conf 反向代理 location
+/opt/1panel/www/sites/<代号>/ssl/            该站点专用的证书副本
+```
+
+关键点：
+
+1. **`proxy/*.conf` 是被 include 的**，往里加文件不会被面板覆盖，
+   放 `zz-wellknown.conf` 这类自定义 location 最合适。
+2. **`root.conf` 会被重新生成** —— 在 UI 里改一次该站点的反向代理，
+   内容就被重置，自定义的 location 全部丢失。改完必须回填。
+3. **证书是复制过去的**：站点 SSL 目录里是独立副本，
+   acme.sh 续期后不会自动同步，必须挂 `--reloadcmd` 钩子去 `cp` + reload。
+4. **后台鉴权用「密码访问」功能**，它底层就是 `auth_basic`，
+   但创建用户之后**还要把那个小开关打开**，否则不生效（实测踩到）。
+
+### 5.7 1Panel 的 conf.d 会被面板覆盖
 
 手写 `/opt/1panel/www/conf.d/*.conf` 后，只要在 1Panel 界面
 改一次该站点的域名/HTTPS，配置就会被重新生成、自定义部分丢失。
@@ -351,38 +399,65 @@ ip link set dev eth0 mtu 1300
 
 默认的 1460 字节分段会被中间设备静默丢弃，TCP 只能无限重传。
 
-### 6.2 云厂商默认只开 SSH 端口
+### 6.2 云厂商默认只开 SSH 端口（某云厂商 实测）
 
 **现象**：脚本自检 6 项全部通过，但公网访问 Element 返回 **522**，
 直连 `chatapi` 域名 TLS 握手失败（curl exit 35）。
 
-**原因**：服务器网卡上是公网 IP（`ip addr` 显示 `107.x.x.x/26`），
-不是 NAT，主机防火墙也是空的（`iptables -L` 无规则、`ufw inactive`），
-但 80/443 从外部连不上——**拦截在云厂商的上层防火墙**。
+**三步定位**
 
-两台测试服务器（香港 dedirock、加州）都是这个情况：
-只开放了 SSH 端口，80/443 和 UDP 段都要在控制台手动放行。
-
-**验证方法**
+1. 先排除主机防火墙 —— ufw 规则明明是对的：
 
 ```bash
-# 本机自检通过（hairpin，绕过云防火墙）
-curl --resolve chat.example.com:443:127.0.0.1 https://chat.example.com/   # 200
-
-# 外部访问失败
-curl https://chat.example.com/                                          # 522
+ufw status verbose
+# 80/tcp  ALLOW IN  Anywhere
+# 443/tcp ALLOW IN  Anywhere
 ```
 
-把两者对比一下就能确认是云防火墙，不是服务问题。
+2. 再抓包，看数据包到底有没有进来：
 
-**修复**：到服务器控制台放行
+```bash
+# 服务器上
+tcpdump -ni ens7 -c 10 "tcp port 80 or tcp port 443"
+
+# 本机同时发起访问
+curl -m 4 http://<公网IP>/
+```
+
+结果是 **`0 packets captured`** —— 请求根本没到达网卡。
+
+3. 结论：拦截在服务商的网络层，服务器内部改不了。
+
+**某云厂商 的具体位置**
 
 ```
-TCP 80, 443, 7881, 3478
-UDP 3478, 49160-49200, 50000-50100
+客户中心 → 产品管理 → VPS → 产品详情
+  → 右侧标签「安全组」→ 管理 → 添加
 ```
 
-脚本的自检会区分「本机检查」和「公网可达性」，后者失败时明确提示去开端口。
+默认策略只有这些入站规则，没有 80/443：
+
+```
+tcp 22      tcp 2222    tcp 3389    udp 68    icmp
+```
+
+需要补的 7 条：
+
+| 方向 | 协议 | 端口 | 用途 |
+| --- | --- | --- | --- |
+| 进 | TCP | 80 | HTTP / ACME |
+| 进 | TCP | 443 | HTTPS |
+| 进 | TCP | 7881 | LiveKit TCP 兜底 |
+| 进 | TCP | 3478 | TURN |
+| 进 | UDP | 3478 | TURN |
+| 进 | UDP | 49160-49200 | TURN 中继 |
+| 进 | UDP | 50000-50100 | LiveKit 媒体 |
+
+补完后 `nc -z <ip> 443` 立刻变 OPEN，页面可用。
+
+> 台湾/香港这类 VPS 常见形态：网卡上是公网 IP、主机防火墙空、
+> 但上层安全组只放行 SSH。判断口诀：
+> **ufw 放行 + tcpdump 收不到包 = 服务商安全组**。
 
 ### 6.3 云安全组 ≠ 主机防火墙
 

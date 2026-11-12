@@ -12,9 +12,20 @@
 # =============================================================================
 set -Eeuo pipefail
 
-VERSION="1.0.0"
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-TEMPLATE_DIR="$SCRIPT_DIR/templates"
+VERSION="1.1.0"
+REPO="ostar999/auto-matrix-element-1panel-cf"
+REPO_REF="${AUTO_MATRIX_REF:-main}"
+TEMPLATE_CACHE="${AUTO_MATRIX_CACHE:-/tmp/auto-matrix-sh}"
+
+# 本地执行（git clone 后 bash install.sh）指向脚本所在目录；
+# 单行命令执行（bash -c "$(curl ...)"）时 BASH_SOURCE 为空，改为下载模板
+SCRIPT_SRC="${BASH_SOURCE[0]:-}"
+if [[ -n $SCRIPT_SRC && -f $SCRIPT_SRC ]]; then
+  SCRIPT_DIR="$(cd -- "$(dirname -- "$SCRIPT_SRC")" && pwd)"
+else
+  SCRIPT_DIR=""
+fi
+TEMPLATE_DIR="${SCRIPT_DIR:+$SCRIPT_DIR/templates}"
 
 # ---------------------------------------------------------------- 默认参数
 DOMAIN=""
@@ -38,6 +49,8 @@ FORCE=0
 PROXY_WEB=1
 PROXY_ADMIN=1
 PUBLIC_IP_OVERRIDE=""
+PANEL_MODE="auto"
+PANEL_API_KEY=""
 
 # ---------------------------------------------------------------- 输出工具
 c_reset=$'\033[0m'; c_red=$'\033[31m'; c_grn=$'\033[32m'
@@ -71,6 +84,8 @@ Matrix 全栈部署 v$VERSION
   --brand NAME           Element 显示名，默认 "Matrix Chat"
   --dir PATH             安装目录，默认 /opt/matrix
   --max-upload SIZE      单文件上限，默认 2G
+  --panel MODE           网站由谁托管: auto|1panel|standalone（默认 auto）
+  --panel-api-key KEY    1Panel API Key，提供后可尝试自动建站（v2）
   --skip-dns             不自动创建 DNS 记录
   --skip-rtc             不部署 LiveKit / coturn（只做聊天）
   --no-proxy-web         网页域名也不走 Cloudflare 代理
@@ -96,6 +111,8 @@ parse_args() {
       --brand)         BRAND="${2:?}"; shift 2 ;;
       --dir)           INSTALL_DIR="${2:?}"; shift 2 ;;
       --max-upload)    MAX_UPLOAD_SIZE="${2:?}"; shift 2 ;;
+      --panel)         PANEL_MODE="${2:?}"; shift 2 ;;
+      --panel-api-key) PANEL_API_KEY="${2:?}"; shift 2 ;;
       --skip-dns)      SKIP_DNS=1; shift ;;
       --skip-rtc)      SKIP_RTC=1; shift ;;
       --no-proxy-web)  PROXY_WEB=0; PROXY_ADMIN=0; shift ;;
@@ -161,6 +178,32 @@ print($2)
 }
 
 # ---------------------------------------------------------------- 预检
+
+fetch_templates() {
+  [[ -n $TEMPLATE_DIR && -d $TEMPLATE_DIR ]] && return 0
+
+  step "获取配置模板"
+  if [[ -d $TEMPLATE_CACHE/templates ]]; then
+    TEMPLATE_DIR="$TEMPLATE_CACHE/templates"
+    ok "复用缓存 $TEMPLATE_DIR"
+    return 0
+  fi
+
+  mkdir -p "$TEMPLATE_CACHE"
+  local url="https://codeload.github.com/$REPO/tar.gz/refs/heads/$REPO_REF"
+  local tgz="$TEMPLATE_CACHE/src.tgz"
+  dim "下载 $url"
+  curl -fsSL --max-time 90 "$url" -o "$tgz" \
+    || die "模板下载失败。可改用：git clone https://github.com/$REPO.git && cd auto-matrix-sh && sudo bash install.sh"
+  tar xzf "$tgz" -C "$TEMPLATE_CACHE" --strip-components=1 \
+    || die "模板解压失败"
+  rm -f "$tgz"
+
+  [[ -d $TEMPLATE_CACHE/templates ]] || die "压缩包里没有 templates 目录"
+  TEMPLATE_DIR="$TEMPLATE_CACHE/templates"
+  ok "模板已就绪（$TEMPLATE_DIR）"
+}
+
 preflight() {
   step "环境检查"
 
@@ -196,6 +239,9 @@ preflight() {
         owner=$(ss -tlnpH "sport = :$p" 2>/dev/null | grep -o 'users:(("[^"]*"' | head -1 | tr -d 'users:(("')
         if [[ $owner == nginx* && -d $INSTALL_DIR/nginx ]]; then
           ok "端口 $p 由本机已有的 Matrix nginx 占用，将复用"
+        elif [[ $owner == *openresty* || $owner == opnty* || $owner == openresty* ]]; then
+          ok "端口 $p 由 1Panel 的 OpenResty 占用（1Panel 模式）"
+          [[ $PANEL_MODE == standalone ]] && die "当前是 standalone 模式，但 80/443 被 1Panel 占着。请用 --panel 1panel，或先停掉 OpenResty"
         else
           die "端口 $p 被 ${owner:-未知进程} 占用，请先停掉它（例如 1Panel 的 OpenResty）"
         fi
@@ -205,6 +251,7 @@ preflight() {
     done
   fi
 
+  fetch_templates
   [[ -d $TEMPLATE_DIR ]] || die "找不到模板目录: $TEMPLATE_DIR"
   ok "模板目录 $TEMPLATE_DIR"
 }
@@ -478,6 +525,119 @@ PY
   fi
 }
 
+
+# ---------------------------------------------------------------- 1Panel 模式
+panel_detected() {
+  [[ -d /opt/1panel ]] && systemctl is-active --quiet 1panel-core 2>/dev/null
+}
+
+panel_openresty_ok() {
+  docker ps --format '{{.Image}}' 2>/dev/null | grep -q '1panel/openresty'
+}
+
+choose_panel_mode() {
+  [[ $PANEL_MODE != auto ]] && return 0
+
+  if panel_detected; then
+    if (( NON_INTERACTIVE )); then
+      PANEL_MODE=1panel
+    elif confirm "检测到 1Panel，网站是否交给 1Panel 管理（推荐 Yes）?" y; then
+      PANEL_MODE=1panel
+    else
+      PANEL_MODE=standalone
+    fi
+  else
+    PANEL_MODE=standalone
+    if (( ! NON_INTERACTIVE )) && confirm "未检测到 1Panel，是否先安装 1Panel 再用它管理网站?" n; then
+      PANEL_MODE=install-1panel
+    fi
+  fi
+  ok "网站托管模式: $PANEL_MODE"
+}
+
+install_1panel() {
+  step "安装 1Panel"
+  warn "1Panel 安装会占用 80/443（它自带 OpenResty），并在装完后由你初始化管理员"
+  if ! confirm "确认安装 1Panel?" y; then
+    PANEL_MODE=standalone
+    warn "已取消，改用独立 nginx"
+    return 0
+  fi
+  curl -fsSL https://resource.fit2cloud.com/1panel/package/v2/quick_start.sh -o /tmp/1panel-install.sh \
+    || die "1Panel 安装脚本下载失败"
+  bash /tmp/1panel-install.sh || die "1Panel 安装失败"
+  ok "1Panel 已安装，请先用 '1pctl user-info' 拿到地址完成初始化"
+  die "初始化 1Panel 后，重新运行本脚本（它会自动识别 1Panel 管理）"
+}
+
+panel_prepare() {
+  step "1Panel 模式准备"
+
+  if systemctl is-active --quiet nginx 2>/dev/null; then
+    warn "检测到宿主机 nginx 正在运行并占用 80/443"
+    dim "1Panel 的 OpenResty 也是要 80/443 的，两者只能留一个"
+    dim "切换到 1Panel 管理：systemctl disable --now nginx"
+    die "请先停掉宿主机 nginx 再重跑"
+  fi
+
+  panel_openresty_ok || die "未检测到 1Panel 的 OpenResty。请先到 应用商店 → Web 服务器 安装 OpenResty，再重跑本脚本"
+
+  ok "1Panel OpenResty 就绪"
+  dim "站点配置已生成在 $INSTALL_DIR/nginx/"
+
+  cat > "$INSTALL_DIR/renew-hook.sh" <<'HOOK'
+#!/bin/bash
+# acme.sh 续期后：把证书同步到 1Panel 各站点目录，再重载 OpenResty
+set -e
+SRC=/etc/nginx/ssl/matrix
+for d in /opt/1panel/www/sites/*/ssl; do
+  [ -d "$d" ] || continue
+  cp "$SRC/fullchain.pem" "$d/fullchain.pem" 2>/dev/null || true
+  cp "$SRC/privkey.pem"  "$d/privkey.pem" 2>/dev/null || true
+done
+ct=$(docker ps --format '{{.Names}}' | grep -i openresty | head -1)
+if [ -n "$ct" ]; then docker exec "$ct" openresty -s reload; fi
+echo "renew-hook done"
+HOOK
+  chmod +x "$INSTALL_DIR/renew-hook.sh"
+  ok "续期钩子已生成: $INSTALL_DIR/renew-hook.sh"
+
+  cat <<EOF
+
+  ${c_yel}在 1Panel 里建 3 个站点（约 3 分钟）${c_reset}
+
+  1) 网站 → 创建 → 反向代理，建三个站点：
+
+       域名                     代理地址
+       ---------------------------------------------
+       $WEB_FQDN      http://127.0.0.1:9180
+       $API_FQDN      http://127.0.0.1:9108
+       $ADMIN_FQDN    http://127.0.0.1:9182
+
+  2) 证书 → 上传证书，填：
+       证书: $SSL_CERT
+       私钥: $SSL_KEY
+     然后各站点 → HTTPS → 打开开关 → 保存
+
+  3) 后台站点 → 密码访问 → 创建用户 → 打开开关（否则管理面板裸奔）
+
+  4) API 站点：把 $INSTALL_DIR/nginx/$API_FQDN.conf 里的
+     /livekit/sfu/、/livekit/jwt/ 两个 location 和
+     client_max_body_size 0 / proxy_request_buffering off
+     写进 1Panel 的 /www/sites/<代号>/proxy/root.conf
+     （UI 改代理会重新生成该文件，改完要回填）
+
+  5) 网页站点：加 /www/sites/<代号>/proxy/zz-wellknown.conf，
+     内容见 $INSTALL_DIR/nginx/ 下的片段
+
+  6) 续期钩子：把 acme.sh 的 reloadcmd 指向
+     $INSTALL_DIR/renew-hook.sh（同步证书到 1Panel 各站点并重载）
+
+  脚本已经把上述片段都生成好了，照着贴即可。
+
+EOF
+}
+
 # ---------------------------------------------------------------- 证书
 install_acme() {
   if [[ -f /root/.acme.sh/acme.sh ]]; then ok "acme.sh 已存在"; return 0; fi
@@ -612,6 +772,14 @@ verify() {
   step "自检"
   local fail=0
 
+  if [[ $PANEL_MODE != standalone ]]; then
+    local code
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:9108/health || true)
+    [[ $code == 200 ]] && ok "Synapse 健康（本机 200）" || { warn "Synapse 健康检查 $code"; fail=1; }
+    warn "网站由 1Panel 托管，HTTP 检查跳过（建完站点后再验）"
+    return $fail
+  fi
+
   check() { # check 描述 url [期望码]
     local desc=$1 url=$2 want=${3:-200} code
     code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 20 --resolve "$(printf '%s' "$url" | awk -F/ '{print $3}'):443:$PUBLIC_IP" "$url" || true)
@@ -634,6 +802,7 @@ verify() {
 }
 
 external_check() {
+  [[ $PANEL_MODE != standalone ]] && { warn "1Panel 模式：站点建好后请自行访问验证"; return 0; }
   step "公网可达性"
   local code
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "https://$WEB_FQDN/" || true)
@@ -732,9 +901,25 @@ main() {
 
   (( DRY_RUN )) || ensure_swap
   (( DRY_RUN )) || ensure_docker
-  (( DRY_RUN )) || ensure_nginx
+
+  if (( DRY_RUN )); then
+    [[ $PANEL_MODE == auto ]] && PANEL_MODE=standalone
+  else
+    choose_panel_mode
+  fi
+  case $PANEL_MODE in
+    install-1panel) (( DRY_RUN )) || install_1panel ;;
+    1panel)         : ;;  # 等配置渲染完再检查并打印清单
+    standalone)     (( DRY_RUN )) || ensure_nginx ;;
+    *) die "未知的 --panel 值: $PANEL_MODE（auto|1panel|standalone）" ;;
+  esac
+
   dns_setup
   render_files
+
+  if [[ $PANEL_MODE == 1panel ]] && (( ! DRY_RUN )); then
+    panel_prepare
+  fi
 
   if (( DRY_RUN )); then
     step "dry-run 结束"
@@ -744,7 +929,9 @@ main() {
 
   start_stack
   issue_cert
-  setup_nginx
+  if [[ $PANEL_MODE == standalone ]]; then
+    setup_nginx
+  fi
   firewall_hint
   create_admin
 
