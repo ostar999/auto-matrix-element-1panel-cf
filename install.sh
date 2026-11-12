@@ -338,7 +338,7 @@ cf_api() { # cf_api METHOD PATH [BODY]
 dns_setup() {
   step "Cloudflare DNS"
   if (( SKIP_DNS )); then warn "已按 --skip-dns 跳过"; return 0; fi
-  [[ -n $CF_TOKEN ]] || { warn "未提供 Cloudflare Token，跳过 DNS 自动创建"; return 0; }
+  [[ -n $CF_TOKEN ]] || die "缺少 Cloudflare Token。请加 --cf-token，或在交互模式里按提示输入"
 
   local zid
 
@@ -1155,6 +1155,22 @@ main() {
     (( ${#ADMIN_PASS} >= 8 )) || die "密码太短"
   fi
   [[ -n $EMAIL ]] || EMAIL="admin@$DOMAIN"
+
+  # Cloudflare Token：交互模式下必须问，否则后面建记录/签证书都会失败
+  if [[ -z $CF_TOKEN ]] && (( ! NON_INTERACTIVE )) && (( ! SKIP_DNS )); then
+    step "Cloudflare API Token"
+    cat <<'TOKENHELP'
+  需要一个能改 DNS 的 Token：
+    Cloudflare → 右上头像 → 我的个人资料 → API 令牌 → 创建令牌
+    → 模板选「编辑区域 DNS」→ 区域选你的域名 → 创建 → 复制
+  权限要求：Zone → DNS → Edit、Zone → Zone → Read
+TOKENHELP
+    while [[ -z $CF_TOKEN ]]; do
+      ask_secret CF_TOKEN "粘贴 Cloudflare API Token（输入时不显示）"
+      [[ -n $CF_TOKEN ]] || warn "Token 不能为空，再试一次"
+    done
+    [[ $CF_TOKEN == cfut_* || ${#CF_TOKEN} -ge 20 ]] || warn "这个值看起来不像 Token，先继续（失败会提示）"
+  fi
 
   if [[ -n $PUBLIC_IP_OVERRIDE ]]; then PUBLIC_IP=$PUBLIC_IP_OVERRIDE; else PUBLIC_IP=$(detect_public_ip); fi
   ok "公网 IP $PUBLIC_IP"
