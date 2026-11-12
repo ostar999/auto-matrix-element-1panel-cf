@@ -34,6 +34,7 @@ API_HOST=""
 ADMIN_HOST=""
 CF_TOKEN="${CF_TOKEN:-}"
 ADMIN_USER="ostar"
+ADMIN_USER_SET=0
 ADMIN_PASS=""
 EMAIL=""
 INSTALL_DIR="/opt/matrix"
@@ -121,7 +122,7 @@ parse_args() {
       --api-host)      API_HOST="${2:?}"; shift 2 ;;
       --admin-host)    ADMIN_HOST="${2:?}"; shift 2 ;;
       --cf-token)      CF_TOKEN="${2:?}"; shift 2 ;;
-      --admin-user)    ADMIN_USER="${2:?}"; shift 2 ;;
+      --admin-user)    ADMIN_USER="${2:?}"; ADMIN_USER_SET=1; shift 2 ;;
       --admin-pass)    ADMIN_PASS="${2:?}"; shift 2 ;;
       --email)         EMAIL="${2:?}"; shift 2 ;;
       --brand)         BRAND="${2:?}"; shift 2 ;;
@@ -1164,7 +1165,11 @@ main() {
     [[ $_RTC == y ]] || SKIP_RTC=1
   fi
 
-  if [[ -z $ADMIN_USER ]]; then ask ADMIN_USER "管理员用户名" "ostar"; fi
+  # 交互模式总是问用户名（除非命令行已经用 --admin-user 指定）
+  if (( ! NON_INTERACTIVE )) && (( ! ADMIN_USER_SET )); then
+    ask ADMIN_USER "管理员用户名（登录名，会变成 @用户名:$WEB_FQDN）" "$ADMIN_USER"
+    [[ $ADMIN_USER =~ ^[a-z0-9._=\-/]+$ ]] || die "用户名只能用小写字母、数字和 . _ = - /"
+  fi
   if [[ -z $ADMIN_PASS ]]; then
     (( NON_INTERACTIVE )) && die "非交互模式必须指定 --admin-pass"
     while [[ -z $ADMIN_PASS ]]; do ask_secret ADMIN_PASS "管理员密码（至少 8 位）"; done
