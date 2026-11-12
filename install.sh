@@ -12,7 +12,7 @@
 # =============================================================================
 set -Eeuo pipefail
 
-VERSION="1.1.0"
+SCRIPT_VERSION="1.2.0"
 REPO="ostar999/auto-matrix-element-1panel-cf"
 REPO_REF="${AUTO_MATRIX_REF:-main}"
 TEMPLATE_CACHE="${AUTO_MATRIX_CACHE:-/tmp/auto-matrix-sh}"
@@ -74,7 +74,7 @@ trap 'die "第 $LINENO 行执行失败，已中止"' ERR
 # ---------------------------------------------------------------- 参数解析
 usage() {
   cat <<EOF
-Matrix 全栈部署 v$VERSION
+Matrix 全栈部署 v$SCRIPT_VERSION
 
 用法: bash install.sh [选项]
 
@@ -573,7 +573,7 @@ enable_registration_without_verification: true"
 
   cat > "$INSTALL_DIR/install-manifest.json" <<JSON
 {
-  "version": "$VERSION",
+  "version": "$SCRIPT_VERSION",
   "installed_at": "$(date -Iseconds)",
   "domain": "$DOMAIN",
   "web_host": "$WEB_HOST",
@@ -941,7 +941,7 @@ EOF
 main() {
   parse_args "$@"
 
-  printf '\n%sMatrix 全栈部署%s v%s\n' "$c_blue" "$c_reset" "$VERSION"
+  printf '\n%sMatrix 全栈部署%s v%s\n' "$c_blue" "$c_reset" "$SCRIPT_VERSION"
 
   preflight
 
