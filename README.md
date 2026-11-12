@@ -689,7 +689,7 @@ bash -c "$(curl -sSL https://raw.githubusercontent.com/ostar999/auto-matrix-elem
 ? 检测到 1Panel，网站是否交给它管理? [y]:
 
 ==> Cloudflare API Token
-? 粘贴 Cloudflare API Token（输入时不显示）: ********
+? 粘贴 Cloudflare API Token（显示为 *）: ********
    ← 第一次跑必填；输入时每个字符显示为 *，退格可删
 
 ==> 管理员

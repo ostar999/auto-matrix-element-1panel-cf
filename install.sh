@@ -1178,7 +1178,7 @@ main() {
   权限要求：Zone → DNS → Edit、Zone → Zone → Read
 TOKENHELP
     while [[ -z $CF_TOKEN ]]; do
-      ask_secret CF_TOKEN "粘贴 Cloudflare API Token（输入时不显示）"
+      ask_secret CF_TOKEN "粘贴 Cloudflare API Token（显示为 *）"
       [[ -n $CF_TOKEN ]] || warn "Token 不能为空，再试一次"
     done
     [[ $CF_TOKEN == cfut_* || ${#CF_TOKEN} -ge 20 ]] || warn "这个值看起来不像 Token，先继续（失败会提示）"
