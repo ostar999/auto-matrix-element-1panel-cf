@@ -55,6 +55,7 @@ FORCE=0
 PROXY_WEB=1
 PROXY_ADMIN=1
 PUBLIC_IP_OVERRIDE=""
+STAGING=0
 PANEL_MODE="auto"
 PANEL_API_KEY=""
 
@@ -98,6 +99,7 @@ Matrix 全栈部署 v$SCRIPT_VERSION
   --max-upload SIZE      单文件上限，默认 2G
   --panel MODE           网站由谁托管: auto|1panel|standalone（默认 auto）
   --panel-api-key KEY    1Panel API Key，提供后可尝试自动建站（v2）
+  --staging              用 Let's Encrypt 测试环境（不限次数，但浏览器不信任）
   --skip-dns             不自动创建 DNS 记录
   --skip-rtc             不部署 LiveKit / coturn（只做聊天）
   --no-proxy-web         网页域名也不走 Cloudflare 代理
@@ -131,6 +133,7 @@ parse_args() {
       --max-upload)    MAX_UPLOAD_SIZE="${2:?}"; shift 2 ;;
       --panel)         PANEL_MODE="${2:?}"; shift 2 ;;
       --panel-api-key) PANEL_API_KEY="${2:?}"; shift 2 ;;
+      --staging)       STAGING=1; shift ;;
       --skip-dns)      SKIP_DNS=1; shift ;;
       --skip-rtc)      SKIP_RTC=1; shift ;;
       --no-proxy-web)  PROXY_WEB=0; PROXY_ADMIN=0; shift ;;
@@ -746,6 +749,11 @@ issue_cert() {
   /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
 
   local args=(-d "$WEB_FQDN" -d "$API_FQDN" -d "$ADMIN_FQDN")
+  local stage_args=()
+  if (( STAGING )); then
+    stage_args=(--staging)
+    warn "使用 Let's Encrypt 测试环境：证书不受浏览器信任，仅用于流程验证"
+  fi
   local primary="$WEB_FQDN"
 
   if /root/.acme.sh/acme.sh --install-cert -d "$primary" \
@@ -754,7 +762,7 @@ issue_cert() {
     ok "复用已签发的证书"
   else
     dim "签发 $primary（共 3 个域名，约 1 分钟）"
-    /root/.acme.sh/acme.sh --issue --dns dns_cf "${args[@]}" --keylength 2048 --force \
+    /root/.acme.sh/acme.sh --issue --dns dns_cf "${args[@]}" --keylength 2048 --force "${stage_args[@]}" \
       >/tmp/acme-issue.log 2>&1 || { tail -25 /tmp/acme-issue.log; die "证书签发失败"; }
     ok "证书签发成功"
     /root/.acme.sh/acme.sh --install-cert -d "$primary" \

@@ -965,7 +965,48 @@ $ grep -c "BEGIN CERTIFICATE" /etc/nginx/ssl/matrix/fullchain.pem
 
 续期成功后触发 `--reloadcmd`，把新证书同步到 1Panel 的三个站点目录并重载 OpenResty（见第 5 节）。
 
-#### 8.0.8 四个常见误解
+#### 8.0.8 反复重装会不会签不出来
+
+会。Let's Encrypt 有一条限制最容易踩：
+
+> **New Certificates per Exact Set of Identifiers：同一组域名，每 7 天最多签 5 张。**
+> 补充速度：每 34 小时恢复 1 张。
+
+我们每次部署都是 `{chat, chatapi, chatad}` 这同一组名字，
+所以**每次重装系统后重新签发，就消耗 1 次额度**。
+
+```
+3 次重装 = 用掉 3/5
+第 6 次重装 → 报错：
+  too many certificates (5) already issued for this exact set of identifiers
+```
+
+注意：普通的「续期」也算在内——官方明确说，非 ARI 方式的续期同样受这条限制约束。
+（真正豁免的只有支持 ARI 的客户端自动续期。）
+
+**三种应对：**
+
+| 办法 | 做法 | 适用 |
+|---|---|---|
+| **① 备份恢复（推荐）** | 重装前打包 `/root/.acme.sh` 和 `/etc/nginx/ssl/matrix/`，装完还原 | 频繁重装调试 |
+| **② 用测试环境** | 加 `--staging`，用 LE 的 staging 环境，**不限次数** | 验证流程（浏览器会报不受信任） |
+| **③ 换一组名字** | 加一个子域，变成新的「identifiers 集合」 | 临时救急 |
+
+**备份恢复具体做法：**
+
+```bash
+# 重装前（在旧系统上）
+tar czf /root/cert-backup.tar.gz /root/.acme.sh /etc/nginx/ssl/matrix
+
+# 重装后（把压缩包传回来，解压到根目录）
+tar xzf /root/cert-backup.tar.gz -C /
+# 再跑脚本，它会检测到证书已存在，直接复用，不消耗额度
+```
+
+脚本的证书步骤是幂等的：`acme.sh --install-cert` 成功就跳过签发，
+所以只要证书文件还在，就不会重新申请。
+
+#### 8.0.9 四个常见误解
 
 | 误解 | 事实 |
 |---|---|
