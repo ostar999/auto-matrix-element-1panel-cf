@@ -156,9 +156,13 @@ ask() { # ask VAR "提示" "默认值"
   if (( NON_INTERACTIVE )); then printf -v "$__var" '%s' "$__def"; return 0; fi
   if [[ -n $__def ]]; then
     read -r -p "  ? $__q [$__def]: " __ans || true
+  __ans="${__ans//$'\r'/}"
   else
     read -r -p "  ? $__q: " __ans || true
   fi
+  # 去掉终端带进来的回车/制表符/首尾空格
+  __ans="${__ans//$'\r'/}"; __ans="${__ans//$'\t'/}"
+  __ans="${__ans#"${__ans%%[![:space:]]*}"}"; __ans="${__ans%"${__ans##*[![:space:]]}"}"
   printf -v "$__var" '%s' "${__ans:-$__def}"
 }
 
