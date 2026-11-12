@@ -1172,7 +1172,7 @@ main() {
   # 交互模式总是问用户名（除非命令行已经用 --admin-user 指定）
   if (( ! NON_INTERACTIVE )) && (( ! ADMIN_USER_SET )); then
     ask ADMIN_USER "管理员用户名（登录名，会变成 @用户名:$WEB_FQDN）" "$ADMIN_USER"
-    [[ $ADMIN_USER =~ ^[a-z0-9._=\-/]+$ ]] || die "用户名只能用小写字母、数字和 . _ = - /"
+    [[ $ADMIN_USER =~ ^[a-z0-9._=/-]+$ ]] || die "用户名只能用小写字母、数字和 . _ = - /"
   fi
   if [[ -z $ADMIN_PASS ]]; then
     (( NON_INTERACTIVE )) && die "非交互模式必须指定 --admin-pass"
