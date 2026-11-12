@@ -689,7 +689,6 @@ panel_cert_setup() {
 #!/bin/bash
 # 1Panel 证书签发/续期后自动执行
 # 用法：面板申请证书时勾选「申请证书之后执行脚本」，把本文件内容粘进去
-SRC="$pdir/live"
 SRC=/opt/1panel/www/sites/$WEB_HOST/ssl
 for d in $API_HOST $ADMIN_HOST; do
   dst="/opt/1panel/www/sites/\$d/ssl"

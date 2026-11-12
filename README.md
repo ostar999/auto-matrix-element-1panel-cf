@@ -332,6 +332,31 @@ bash -c "$(curl -sSL https://resource.fit2cloud.com/1panel/package/v2/quick_star
 >
 > 三个端口都只监听 `127.0.0.1`，只有本机能访问，不会被公网直接打到。
 
+### 3.4b 证书由谁管（默认：1Panel）
+
+脚本默认把证书管理交给 1Panel（`--cert-mode panel`），部署时会生成两样东西：
+
+```
+/opt/matrix/panel-cert/placeholder.crt/.key   占位自签证书
+/opt/matrix/panel-cert/ssl-sync-hook.sh       续期后同步+reload 的钩子
+```
+
+**为什么需要占位证书**：站点要先开启 HTTPS，nginx 配置才会指向
+`/www/sites/<代号>/ssl/`。占位证书只是用来"占位"，稍后会被正式证书覆盖。
+
+**面板里的三步**（脚本跑完会打印同样的提示）：
+
+1. 上传占位证书 → 三个站点开启 HTTPS 并选它
+2. 申请正式证书：主域名 + 其他域名，DNS 账号，勾**自动续签**
+3. 同一次申请里勾选：
+   - **推送证书到本地目录** → `/opt/1panel/www/sites/<网页代号>/ssl`
+   - **申请证书之后执行脚本** → 粘贴 `ssl-sync-hook.sh` 的内容
+
+点确认后：签发 → 推送覆盖 → 执行脚本 → 三个站点自动生效。之后续期同链路，全自动。
+
+> 想回到「脚本自己用 acme.sh 签」的老方式：加 `--cert-mode acme`。
+> 两种方式**不要同时启用**，否则会撞 Let's Encrypt 的签发限额。
+
 ### 3.5 上传证书并开启 HTTPS
 
 **先传证书**：左侧 **网站 → 证书 → 上传证书**
@@ -770,6 +795,7 @@ acme.sh 已自动加 cron。**1Panel 模式下**，续期后需要把新证书�
 | `--language` | 默认界面语言 | `zh_Hans` |
 | `--theme` | 默认主题 `light`/`dark` | `light` |
 | `--panel` | `auto` / `1panel` / `standalone` | `auto` |
+| `--cert-mode` | `panel`（面板管）/ `acme`（脚本签） | `panel` |
 | `--skip-dns` | 不建 DNS 记录 | — |
 | `--skip-rtc` | 不装 LiveKit/coturn | — |
 | `--no-proxy-web` | 网页域名也不走 CF 代理 | — |
