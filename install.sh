@@ -38,6 +38,12 @@ ADMIN_PASS=""
 EMAIL=""
 INSTALL_DIR="/opt/matrix"
 BRAND="Matrix Chat"
+FEDERATION="closed"
+FEDERATION_DOMAINS=""
+ALLOW_REGISTRATION="n"
+ALLOW_GUESTS="n"
+UI_LANG="zh_Hans"
+UI_THEME="light"
 TZ_NAME="Asia/Shanghai"
 MAX_UPLOAD_SIZE="2G"
 
@@ -82,6 +88,12 @@ Matrix 全栈部署 v$VERSION
   --admin-pass PASS      管理员密码（非交互模式必填）
   --email EMAIL          证书邮箱，默认 admin@<domain>
   --brand NAME           Element 显示名，默认 "Matrix Chat"
+  --federation MODE      联邦: closed|whitelist|open，默认 closed
+  --federation-domains D 白名单域名，逗号分隔（配合 whitelist）
+  --allow-registration   开放注册（默认关闭）
+  --allow-guests         允许游客浏览（默认关闭）
+  --language LANG        默认界面语言，默认 zh_Hans
+  --theme THEME          默认主题 light|dark，默认 light
   --dir PATH             安装目录，默认 /opt/matrix
   --max-upload SIZE      单文件上限，默认 2G
   --panel MODE           网站由谁托管: auto|1panel|standalone（默认 auto）
@@ -109,6 +121,12 @@ parse_args() {
       --admin-pass)    ADMIN_PASS="${2:?}"; shift 2 ;;
       --email)         EMAIL="${2:?}"; shift 2 ;;
       --brand)         BRAND="${2:?}"; shift 2 ;;
+      --federation)    FEDERATION="${2:?}"; shift 2 ;;
+      --federation-domains) FEDERATION_DOMAINS="${2:?}"; shift 2 ;;
+      --allow-registration) ALLOW_REGISTRATION=y; shift ;;
+      --allow-guests)  ALLOW_GUESTS=y; shift ;;
+      --language)      UI_LANG="${2:?}"; shift 2 ;;
+      --theme)         UI_THEME="${2:?}"; shift 2 ;;
       --dir)           INSTALL_DIR="${2:?}"; shift 2 ;;
       --max-upload)    MAX_UPLOAD_SIZE="${2:?}"; shift 2 ;;
       --panel)         PANEL_MODE="${2:?}"; shift 2 ;;
@@ -143,6 +161,17 @@ ask_secret() { # ask_secret VAR "提示"
   read -r -s -p "  ? $__q: " __ans || true
   printf '\n'
   printf -v "$__var" '%s' "$__ans"
+}
+
+yesno() { # yesno VAR "问题" 默认(y/n) —— 结果存 y/n
+  local __var=$1 __q=$2 __def=${3:-n} __ans=""
+  if (( NON_INTERACTIVE )); then printf -v "$__var" '%s' "$__def"; return 0; fi
+  read -r -p "  ? $__q [$__def]: " __ans || true
+  __ans=${__ans:-$__def}
+  case $__ans in
+    [Yy]*) printf -v "$__var" 'y' ;;
+    *)     printf -v "$__var" 'n' ;;
+  esac
 }
 
 confirm() { # confirm "问题" 默认(y/n)
@@ -483,6 +512,38 @@ turn_allow_guests: false"
 "
   fi
 
+  # ---- 联邦 / 注册 / 游客 / 界面 ----
+  case $FEDERATION in
+    closed)
+      PH_FEDERATION_BLOCK="# 联邦：关闭（仅本服务器用户互通）
+federation_domain_whitelist: []
+trusted_key_servers: []
+suppress_key_server_warning: true" ;;
+    whitelist)
+      local doms="" d
+      IFS=',' read -ra _doms <<< "$FEDERATION_DOMAINS"
+      for d in "${_doms[@]}"; do
+        d=$(echo "$d" | tr -d ' ')
+        [[ -n $d ]] && doms+="  - \"$d\"
+"
+      done
+      PH_FEDERATION_BLOCK="# 联邦：白名单
+federation_domain_whitelist:
+${doms}suppress_key_server_warning: true" ;;
+    open)
+      PH_FEDERATION_BLOCK="# 联邦：开放（任何 Matrix 服务器都能互通）" ;;
+  esac
+
+  if [[ $ALLOW_REGISTRATION == y ]]; then
+    PH_REGISTRATION_BLOCK="enable_registration: true
+enable_registration_without_verification: true"
+  else
+    PH_REGISTRATION_BLOCK="enable_registration: false"
+  fi
+
+  [[ $ALLOW_GUESTS == y ]] && PH_ALLOW_GUESTS=true || PH_ALLOW_GUESTS=false
+  [[ $ALLOW_GUESTS == y ]] && PH_DISABLE_GUESTS=false || PH_DISABLE_GUESTS=true
+
   export PH_DOMAIN=$DOMAIN PH_WEB_FQDN=$WEB_FQDN PH_API_FQDN=$API_FQDN PH_ADMIN_FQDN=$ADMIN_FQDN
   export PH_WEB_HOST=$WEB_HOST PH_API_HOST=$API_HOST PH_ADMIN_HOST=$ADMIN_HOST
   export PH_SECRET_DB=$SECRET_DB PH_SECRET_REG=$SECRET_REG PH_SECRET_MAC=$SECRET_MAC
@@ -490,6 +551,8 @@ turn_allow_guests: false"
   export PH_SECRET_AS=$SECRET_AS PH_SECRET_HS=$SECRET_HS
   export PH_LIVEKIT_KEY=$LIVEKIT_KEY PH_LIVEKIT_SECRET=$LIVEKIT_SECRET
   export PH_BRAND=$BRAND PH_MAX_UPLOAD_SIZE=$MAX_UPLOAD_SIZE
+  export PH_FEDERATION_BLOCK PH_REGISTRATION_BLOCK PH_ALLOW_GUESTS PH_DISABLE_GUESTS
+  export PH_UI_LANG=$UI_LANG PH_UI_THEME=$UI_THEME
   export PH_SSL_CERT=$SSL_CERT PH_SSL_KEY=$SSL_KEY PH_HTPASSWD=$HTPASSWD
   export PH_TURN_BLOCK PH_RTC_EXPERIMENTAL PH_MATRIX_RTC_BLOCK PH_APP_SERVICE_BLOCK PH_LIVEKIT_BLOCK
 
@@ -507,6 +570,31 @@ turn_allow_guests: false"
   chmod 644 "$INSTALL_DIR"/synapse/homeserver.yaml "$INSTALL_DIR"/element/config.json \
             "$INSTALL_DIR"/livekit/*.yaml "$INSTALL_DIR"/coturn/turnserver.conf
   chown -R 991:991 "$INSTALL_DIR/data/synapse"
+
+  cat > "$INSTALL_DIR/install-manifest.json" <<JSON
+{
+  "version": "$VERSION",
+  "installed_at": "$(date -Iseconds)",
+  "domain": "$DOMAIN",
+  "web_host": "$WEB_HOST",
+  "api_host": "$API_HOST",
+  "admin_host": "$ADMIN_HOST",
+  "brand": "$BRAND",
+  "max_upload_size": "$MAX_UPLOAD_SIZE",
+  "federation": "$FEDERATION",
+  "federation_domains": "$FEDERATION_DOMAINS",
+  "allow_registration": $([[ $ALLOW_REGISTRATION == y ]] && echo true || echo false),
+  "allow_guests": $([[ $ALLOW_GUESTS == y ]] && echo true || echo false),
+  "language": "$UI_LANG",
+  "theme": "$UI_THEME",
+  "panel_mode": "$PANEL_MODE",
+  "rtc": $([[ $SKIP_RTC == 1 ]] && echo false || echo true),
+  "admin_user": "$ADMIN_USER",
+  "install_dir": "$INSTALL_DIR"
+}
+JSON
+  ok "安装参数已写入 install-manifest.json"
+
   ok "容器配置已生成"
 
   if (( SKIP_RTC )); then
@@ -882,6 +970,31 @@ main() {
   dim "网页 $WEB_FQDN"
   dim "接口 $API_FQDN"
   dim "后台 $ADMIN_FQDN"
+
+  step "可选设置（全部回车即用默认）"
+  ask BRAND "站点名称 / 品牌" "$BRAND"
+  ask MAX_UPLOAD_SIZE "单文件上传上限（100M/500M/2G/10G，0=不限）" "$MAX_UPLOAD_SIZE"
+
+  ask FEDERATION "联邦模式 closed/whitelist/open" "$FEDERATION"
+  case $FEDERATION in
+    closed|whitelist|open) ;;
+    *) die "联邦模式只能是 closed / whitelist / open" ;;
+  esac
+  if [[ $FEDERATION == whitelist ]]; then
+    ask FEDERATION_DOMAINS "允许联邦的域名（逗号分隔，如 a.com,b.com）" "$FEDERATION_DOMAINS"
+    [[ -n $FEDERATION_DOMAINS ]] || die "whitelist 模式必须给至少一个域名"
+  fi
+
+  yesno ALLOW_REGISTRATION "允许任何人注册" "$ALLOW_REGISTRATION"
+  yesno ALLOW_GUESTS "允许游客浏览房间" "$ALLOW_GUESTS"
+  ask UI_LANG "默认界面语言（zh_Hans/en）" "$UI_LANG"
+  ask UI_THEME "默认主题（light/dark）" "$UI_THEME"
+
+  if [[ $UI_THEME != light && $UI_THEME != dark ]]; then die "主题只能是 light 或 dark"; fi
+  if (( ! SKIP_RTC )) && (( ! NON_INTERACTIVE )); then
+    yesno _RTC "启用音视频通话（LiveKit + coturn）" "y"
+    [[ $_RTC == y ]] || SKIP_RTC=1
+  fi
 
   if [[ -z $ADMIN_USER ]]; then ask ADMIN_USER "管理员用户名" "ostar"; fi
   if [[ -z $ADMIN_PASS ]]; then

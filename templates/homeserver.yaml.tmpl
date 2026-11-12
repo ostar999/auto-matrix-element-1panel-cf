@@ -6,10 +6,8 @@
 server_name: "@WEB_FQDN@"
 public_baseurl: "https://@API_FQDN@/"
 
-# 私有服务器，关闭联邦
-federation_domain_whitelist: []
-trusted_key_servers: []
-suppress_key_server_warning: true
+# 联邦策略
+@FEDERATION_BLOCK@
 
 report_stats: false
 pid_file: /data/homeserver.pid
@@ -64,7 +62,8 @@ rc_delayed_event_mgmt:
 
 @APP_SERVICE_BLOCK@
 
-enable_registration: false
+@REGISTRATION_BLOCK@
+allow_guest_access: @ALLOW_GUESTS@
 registration_shared_secret: "@SECRET_REG@"
 
 signing_key_path: "/data/@WEB_FQDN@.signing.key"
