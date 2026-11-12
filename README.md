@@ -14,7 +14,50 @@
 
 ---
 
+## 快速开始（已在真机验证的 10 步）
+
+> 标记说明：🖱️ 在 1Panel 网页点 ｜ ⌨️ 在面板终端粘命令 ｜ 🤖 脚本自动做 ｜ 👀 系统输出（不用操作）
+
+| # | 动作 | 类型 | 做什么 |
+|---|---|---|---|
+| 1 | 登录面板 | 🖱️ | 打开面板地址，输入账号密码 |
+| 2 | 装 OpenResty | 🖱️ | 应用商店搜 `openresty` → 安装 |
+| 3 | 跑部署 | ⌨️ | 面板「终端」里粘一条命令（见 4.1） |
+| 4 | 建三个站点 | 🖱️ | 网站 → 创建 → 反向代理，填三行表 |
+| 5 | 上传占位证书 | ⌨️+🖱️ | `cat` 打印证书 → 粘进「上传证书」 |
+| 6 | 开 HTTPS | 🖱️ | 三个站点各选一次占位证书 |
+| 7 | 建两个账户 | 🖱️ | 证书 → Acme 账户 / DNS 账户 |
+| 8 | 申请正式证书 | ⌨️+🖱️ | `cat` 钩子 → 申请证书（推送目录+钩子） |
+| 9 | 补 nginx 片段 | ⌨️ | `bash /opt/matrix/panel-cert/apply-snippets.sh` |
+| 10 | 登录网页 | 🖱️ | 打开 `https://<网页域名>`，登录 |
+
+需要你粘的命令一共 5 条（1 条部署 + 2 条打印证书 + 1 条打印钩子 + 1 条写片段）：
+
+```bash
+# ③ 部署（把域名、Token、密码换成你自己的）
+bash -c "$(curl -sSL https://raw.githubusercontent.com/ostar999/auto-matrix-element-1panel-cf/main/install.sh)" _ \
+  --non-interactive --panel 1panel --cert-mode panel \
+  --domain example.com --web-host chat \
+  --cf-token "你的Token" --admin-user ostar --admin-pass "你的密码"
+
+# ⑤ 打印占位证书（分别打印 .crt 和 .key，复制输出粘进面板）
+cat /opt/matrix/panel-cert/placeholder.crt
+cat /opt/matrix/panel-cert/placeholder.key
+
+# ⑧ 打印续期钩子（复制输出粘进「申请证书」的脚本框）
+cat /opt/matrix/panel-cert/ssl-sync-hook.sh
+
+# ⑨ 写入三个 nginx 片段并重载
+bash /opt/matrix/panel-cert/apply-snippets.sh
+```
+
+🤖 其余全部自动：建 DNS 记录、生成配置与密钥、起 7 个容器、续期同步、重载 OpenResty。
+
+---
+
 ## 目录
+
+- [快速开始（10 步）](#快速开始已在真机验证的-10-步)
 
 - [0. 这些材料分别从哪来](#0-这些材料分别从哪来)
 - [1. 服务器准备](#1-服务器准备)
@@ -258,13 +301,21 @@ curl -s -H "Authorization: Bearer cfut_你复制的那串" \
 >
 > 想三个都灰云：脚本加 `--no-proxy-web`。
 
-### 2.6 证书模式（了解即可，不用改）
+### 2.6 证书模式（默认交给 1Panel）
 
 脚本申请的是 **Let's Encrypt 正式证书**（不是 Cloudflare 的源站证书），所以：
 
 - Cloudflare → SSL/TLS → Overview 设成 **Full (strict)** 是安全的
 - 无需在 Cloudflare 里上传任何证书
-- 证书到期前 acme.sh 会自动续（第 5 节有同步钩子）
+
+证书由谁管由 `--cert-mode` 决定：
+
+| 模式 | 谁签发 | 续期 | 首次人工 |
+|---|---|---|---|
+| `panel`（默认） | 1Panel | 面板定时任务 + 推送目录 + 钩子 | 需在面板点 4 步 |
+| `acme` | 脚本里的 acme.sh | acme.sh cron + `renew-hook.sh` | 全自动 |
+
+两种模式都验证过。**不要同时开**，否则会撞 Let's Encrypt 的签发限额。
 
 ---
 
@@ -354,6 +405,15 @@ bash -c "$(curl -sSL https://resource.fit2cloud.com/1panel/package/v2/quick_star
 
 点确认后：签发 → 推送覆盖 → 执行脚本 → 三个站点自动生效。之后续期同链路，全自动。
 
+**证书就位后还剩一件事**：补三个 nginx 片段（客户端发现、解除上传限制、LiveKit 信令）。
+不用手写，脚本已经生成了执行文件：
+
+```bash
+bash /opt/matrix/panel-cert/apply-snippets.sh
+```
+
+输出 `✓ 三个片段已写入并重载 OpenResty` 即完成。可以重复执行。
+
 > 想回到「脚本自己用 acme.sh 签」的老方式：加 `--cert-mode acme`。
 > 两种方式**不要同时启用**，否则会撞 Let's Encrypt 的签发限额。
 
@@ -386,6 +446,15 @@ bash -c "$(curl -sSL https://resource.fit2cloud.com/1panel/package/v2/quick_star
 创建完，**把这一页的那个小开关打开**（不开不生效，这里很容易漏）。
 
 ### 3.7 给 API 站点补一段配置
+
+> **不想看原理的，直接跑这一条**（站点建好、证书就位之后）：
+>
+> ```bash
+> bash /opt/matrix/panel-cert/apply-snippets.sh
+> ```
+>
+> 它会写完 3.7 + 3.8 要求的全部片段并重载 OpenResty。
+> 下面保留手动做法和原理，仅供排查问题时参考。
 
 #### 3.7.1 为什么必须改
 
@@ -807,6 +876,17 @@ acme.sh 已自动加 cron。**1Panel 模式下**，续期后需要把新证书�
 
 ## 7. 常见问题
 
+### 7.0 已知限制（不是 bug）
+
+| 现象 | 原因 | 怎么办 |
+|---|---|---|
+| 站点 HTTPS 的证书下拉显示「无数据」 | 1Panel 2.5.x 只列手动上传的证书，面板签发的不进候选 | 用「推送目录 + 钩子」，不需要在站点里选 |
+| Element 首次打开是英文 | 该版本 Element 未采用 `default_language` | 右上角语言选择器切「简体中文」，浏览器会记住 |
+| 建站后代号变成「域名+代号」 | 代号框自动拼接 | 先把代号框**清空**再打字 |
+| 申请证书点确认没反应 | 勾选复选框会重绘表单，清掉已选的 DNS 账号 | 先勾复选框 → 填域名目录脚本 → 最后选 DNS 账号 |
+| 续期报 `429 too many certificates` | 同一组域名 7 天限 5 张 | 测试用 `--staging`，或换一组域名 |
+| 面板重装后申请证书没有可选项 | Acme/DNS 账户跟着丢了 | 重建这两个账户再申请 |
+
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | 公网 522 / 超时 | 云安全组没放行 80/443 | 第 1.3 节，`tcpdump` 抓包确认 |
@@ -1176,8 +1256,8 @@ docker exec "$ct" openresty -t && docker exec "$ct" openresty -s reload
 | 站点生效 | ❌ | ✅ |
 | 首次人工 | 绑不上 | 配置一次 |
 
-> 本站脚本默认仍用 acme.sh（全自动、零人工）。要用面板管证书，按上面配一次即可，
-> 之后续期全自动。两种方式不要同时启用，否则会撞 Let's Encrypt 的签发限额。
+> 脚本默认就是这条路径（`--cert-mode panel`）。想回到 acme.sh 全自动方案，
+> 加 `--cert-mode acme`。两种方式不要同时启用，否则会撞 Let's Encrypt 的签发限额。
 
 ### 8.4 什么情况下 Cloudflare 证书才合适
 
