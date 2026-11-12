@@ -766,6 +766,19 @@ HOOK
   chmod +x "$INSTALL_DIR/renew-hook.sh"
   ok "续期钩子已生成: $INSTALL_DIR/renew-hook.sh"
 
+  if [[ $CERT_MODE == panel ]]; then
+    CERT_UPLOAD_HINT="       证书: $INSTALL_DIR/panel-cert/placeholder.crt
+       私钥: $INSTALL_DIR/panel-cert/placeholder.key
+       （占位证书，正式证书随后在面板申请，见下方证书步骤）"
+    HOOK_HINT="  （证书由面板管理：占位证书上传、正式证书申请与续期钩子，
+     见下方『证书由 1Panel 管理』一段）"
+  else
+    CERT_UPLOAD_HINT="       证书: $SSL_CERT
+       私钥: $SSL_KEY"
+    HOOK_HINT="  6) 续期钩子：把 acme.sh 的 reloadcmd 指向
+     $INSTALL_DIR/renew-hook.sh（同步证书到 1Panel 各站点并重载）"
+  fi
+
   cat <<EOF
 
   ${c_yel}在 1Panel 里建 3 个站点（约 3 分钟）${c_reset}
@@ -779,8 +792,7 @@ HOOK
        $ADMIN_FQDN    http://127.0.0.1:9182
 
   2) 证书 → 上传证书，填：
-       证书: $SSL_CERT
-       私钥: $SSL_KEY
+${CERT_UPLOAD_HINT}
      然后各站点 → HTTPS → 打开开关 → 保存
 
   3) 后台站点 → 密码访问 → 创建用户 → 打开开关（否则管理面板裸奔）
@@ -794,8 +806,7 @@ HOOK
   5) 网页站点：加 /www/sites/<代号>/proxy/zz-wellknown.conf，
      内容见 $INSTALL_DIR/nginx/ 下的片段
 
-  6) 续期钩子：把 acme.sh 的 reloadcmd 指向
-     $INSTALL_DIR/renew-hook.sh（同步证书到 1Panel 各站点并重载）
+${HOOK_HINT}
 
   脚本已经把上述片段都生成好了，照着贴即可。
 
