@@ -42,7 +42,7 @@ FEDERATION="closed"
 FEDERATION_DOMAINS=""
 ALLOW_REGISTRATION="n"
 ALLOW_GUESTS="n"
-UI_LANG="zh_Hans"
+UI_LANG="zh-CN"
 UI_THEME="light"
 TZ_NAME="Asia/Shanghai"
 MAX_UPLOAD_SIZE="2G"
@@ -94,7 +94,7 @@ Matrix 全栈部署 v$SCRIPT_VERSION
   --federation-domains D 白名单域名，逗号分隔（配合 whitelist）
   --allow-registration   开放注册（默认关闭）
   --allow-guests         允许游客浏览（默认关闭）
-  --language LANG        默认界面语言，默认 zh_Hans
+  --language LANG        默认界面语言，默认 zh-CN（可选 en）
   --theme THEME          默认主题 light|dark，默认 light
   --dir PATH             安装目录，默认 /opt/matrix
   --max-upload SIZE      单文件上限，默认 2G
@@ -558,6 +558,10 @@ enable_registration_without_verification: true"
   export PH_LIVEKIT_KEY=$LIVEKIT_KEY PH_LIVEKIT_SECRET=$LIVEKIT_SECRET
   export PH_BRAND=$BRAND PH_MAX_UPLOAD_SIZE=$MAX_UPLOAD_SIZE
   export PH_FEDERATION_BLOCK PH_REGISTRATION_BLOCK PH_ALLOW_GUESTS PH_DISABLE_GUESTS
+  case $UI_LANG in
+    zh_Hans|zh_CN|zh) UI_LANG=zh-CN ;;
+    zh_Hant|zh_TW)    UI_LANG=zh-TW ;;
+  esac
   export PH_UI_LANG=$UI_LANG PH_UI_THEME=$UI_THEME
   export PH_SSL_CERT=$SSL_CERT PH_SSL_KEY=$SSL_KEY PH_HTPASSWD=$HTPASSWD
   export PH_TURN_BLOCK PH_RTC_EXPERIMENTAL PH_MATRIX_RTC_BLOCK PH_APP_SERVICE_BLOCK PH_LIVEKIT_BLOCK
@@ -1079,7 +1083,7 @@ main() {
 
   yesno ALLOW_REGISTRATION "允许任何人注册" "$ALLOW_REGISTRATION"
   yesno ALLOW_GUESTS "允许游客浏览房间" "$ALLOW_GUESTS"
-  ask UI_LANG "默认界面语言（zh_Hans/en）" "$UI_LANG"
+  ask UI_LANG "默认界面语言（zh-CN/en）" "$UI_LANG"
   ask UI_THEME "默认主题（light/dark）" "$UI_THEME"
 
   if [[ $UI_THEME != light && $UI_THEME != dark ]]; then die "主题只能是 light 或 dark"; fi
