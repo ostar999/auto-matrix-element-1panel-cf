@@ -360,24 +360,63 @@ bash -c "$(curl -sSL https://resource.fit2cloud.com/1panel/package/v2/quick_star
 
 创建完，**把这一页的那个小开关打开**（不开不生效，这里很容易漏）。
 
-### 3.7 给 API 站点补两段配置
+### 3.7 给 API 站点补一段配置
 
-1Panel 生成的反向代理只转发 `/`，而 LiveKit 信令和大文件上传需要额外配置。
+#### 3.7.1 为什么必须改
 
-**文件位置**：`/opt/1panel/www/sites/chatapi/proxy/root.conf`
+1Panel 建站点时，只会填一个上游地址，所以**所有请求都转给 Synapse**：
 
-> `chatapi` 是**站点代号**（创建站点时填的那个），对应你在 1Panel 里
-> 域名为 `chatapi.example.com` 的那个站点。代号不同，路径里的目录名就不同。
+```
+https://chatapi.example.com/任意路径  ──►  127.0.0.1:9108（Synapse）
+```
 
-把整个文件的内容替换成下面这段：
+但这台机器上其实跑着**三个**程序，各占一个端口：
 
-> 📌 **这段里没有域名，不用替换任何东西**。
-> 域名写在 1Panel 生成的 `/opt/1panel/www/conf.d/chatapi.conf` 里，
-> 这里只写路径规则和上游地址；端口和脚本默认值一致（7880/8080/9108），
-> 除非你用 `--dir` 或改过 compose，否则原样粘贴即可。
+| 程序 | 端口 | 负责什么 | 有独立域名吗 |
+|---|---|---|---|
+| Synapse | 9108 | 登录、消息、文件上传下载 | 有（chatapi） |
+| LiveKit | 7880 | 音视频房间的信令（WebSocket） | ❌ 没有 |
+| lk-jwt | 8080 | 通话前签发 token | ❌ 没有 |
+
+后两个没有域名，只能借用 `chatapi` 这个域名，靠**路径**区分。
+
+如果不加下面这段配置，Element 发起通话时，请求 `/livekit/jwt/...` 会被当成
+Matrix API 的路径发给 Synapse，Synapse 不认识 → **404 → 通话打不开**。
+
+#### 3.7.2 要达成的效果
+
+```
+https://chatapi.example.com/livekit/sfu/...   ──►  LiveKit   127.0.0.1:7880
+https://chatapi.example.com/livekit/jwt/...   ──►  lk-jwt    127.0.0.1:8080
+https://chatapi.example.com/其他所有路径        ──►  Synapse  127.0.0.1:9108
+```
+
+#### 3.7.3 操作（3 步）
+
+**第 1 步：找到这个文件**
+
+```
+/opt/1panel/www/sites/chatapi/proxy/root.conf
+                      └──┬──┘
+                    站点「代号」
+```
+
+- `chatapi` 是**建站点时填的「代号」**，不是域名。你填 `xyz`，路径就是
+  `/opt/1panel/www/sites/xyz/proxy/root.conf`
+- 想确认代号：**网站** → 站点那一行的「网站目录」列，或直接 `ls /opt/1panel/www/sites/`
+
+打开方式二选一：
+
+- **1Panel 界面**：左侧 **文件** → 地址栏输入 `/opt/1panel/www/sites/chatapi/proxy`
+  → 找到 `root.conf` → 右键 **编辑**
+- **SSH**：见下面的第 2 步
+
+**第 2 步：把文件内容整体替换**
+
+把这**整个文件**的内容清空，粘贴下面这段：
 
 ```nginx
-# LiveKit 信令 WebSocket（路径前缀必须剥掉）
+# ① LiveKit 信令（WebSocket）
 location ^~ /livekit/sfu/ {
     proxy_pass http://127.0.0.1:7880/;
     proxy_http_version 1.1;
@@ -391,7 +430,7 @@ location ^~ /livekit/sfu/ {
     proxy_buffering off;
 }
 
-# lk-jwt 签发 token
+# ② lk-jwt 签发通话 token
 location ^~ /livekit/jwt/ {
     proxy_pass http://127.0.0.1:8080/;
     proxy_http_version 1.1;
@@ -400,7 +439,7 @@ location ^~ /livekit/jwt/ {
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 
-# Matrix API 本体：这两个参数是大文件上传的关键
+# ③ 其余全部给 Synapse
 location ^~ / {
     client_max_body_size 0;
     proxy_request_buffering off;
@@ -415,18 +454,76 @@ location ^~ / {
 }
 ```
 
-> ⚠️ 在 1Panel 界面里改这个站点的「反向代理」，`root.conf` 会被重新生成，
-> **上面这些会全部丢失**。改完界面记得回填。
+> 📌 **这段里没有域名，不需要替换任何东西。**
+> 域名写在 1Panel 自己生成的 `/opt/1panel/www/conf.d/chatapi.conf`（`server_name` 那行），
+> 这里只负责「哪条路径转发到哪个端口」。端口用的就是脚本默认值（7880/8080/9108），
+> 除非你改过 `docker-compose.yaml`，否则原样粘贴即可。
 
-**改完立刻验证**（返回 200 说明 LiveKit 路径通了）：
+用 SSH 一次性写入（把 `chatapi` 换成你的代号）：
+
+```bash
+cat > /opt/1panel/www/sites/chatapi/proxy/root.conf <<'EOF'
+（把上面那段粘进来）
+EOF
+```
+
+> 注意 `<<'EOF'` 的引号不能丢：没有引号的话，`$host`、`$http_upgrade`
+> 会被 shell 当成变量展开成空字符串，配置就废了。
+
+**第 3 步：让配置生效**
+
+```bash
+ct=$(docker ps --format '{{.Names}}' | grep -i openresty | head -1)
+docker exec "$ct" openresty -t        # 先检查语法，能看到 successful
+docker exec "$ct" openresty -s reload # 再重载
+```
+
+#### 3.7.4 这段配置里每一行在做什么
+
+| 配置 | 作用 |
+|---|---|
+| `location ^~ /livekit/sfu/` | 匹配以这个开头的请求；`^~` 表示优先级高于后面的 `/` |
+| `proxy_pass http://127.0.0.1:7880/;` | **结尾的 `/` 是关键**：它会把 `/livekit/sfu` 这段前缀剥掉再转发 |
+| `proxy_set_header Upgrade $http_upgrade;`<br>`proxy_set_header Connection "upgrade";` | 允许 WebSocket 长连接（LiveKit 信令就是 WS） |
+| `proxy_read_timeout 3600s;` | 通话可能持续很久，超时设大一小时 |
+| `proxy_buffering off;` | 信令是实时的，不能攒着再发 |
+| `client_max_body_size 0;` | **0 = 不限大小**。nginx 默认只收 1 MB，不改这条传不了大文件 |
+| `proxy_request_buffering off;` | 边收边转，不会先把整个文件写到临时目录再转发 |
+
+关于「剥前缀」举个具体例子：
+
+```
+Element 请求：wss://chatapi.example.com/livekit/sfu/rtc?access_token=xxx
+实际转给：    ws://127.0.0.1:7880/rtc?access_token=xxx
+                                    ↑ /livekit/sfu 被去掉了
+```
+
+LiveKit 只认 `/rtc`，多一层前缀它会 404。所以 `proxy_pass` 结尾那个斜杠
+**不能省**。
+
+#### 3.7.5 验证
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' https://chatapi.example.com/livekit/jwt/healthz
 curl -s -o /dev/null -w '%{http_code}\n' https://chatapi.example.com/_matrix/client/versions
 ```
 
-两个都返回 200 才算配置正确。如果第一个 404，说明 `/livekit/jwt/` 那段没生效
-（检查 `proxy_pass` 结尾有没有斜杠、文件有没有被面板重置）。
+两个都返回 `200` 才算对：
+
+| 结果 | 说明 |
+|---|---|
+| 两个 200 | ✅ 配置正确 |
+| 第一个 404 | `/livekit/jwt/` 那段没生效，检查 `proxy_pass` 结尾斜杠 |
+| 第一个 502 | lk-jwt 容器没起来，`docker compose ps` 看一下 |
+| 两个都 404 | 文件没被 include，检查是不是改错了目录（代号对不对） |
+
+#### 3.7.6 一个必须记住的坑
+
+> ⚠️ 在 1Panel 界面里点这个站点的 **配置 → 反向代理 → 保存**，
+> `root.conf` 会被**整个重新生成**，上面这三段配置全部丢失，
+> 通话和大文件上传会同时失效。
+>
+> 一旦在界面里动过反向代理，就要回到 3.7.3 重新粘一遍。
 
 ### 3.8 给网页站点加客户端发现
 
