@@ -16,7 +16,7 @@
 
 ## 目录
 
-- [0. 开跑之前：准备清单](#0-开跑之前准备清单)
+- [0. 这些材料分别从哪来](#0-这些材料分别从哪来)
 - [1. 服务器准备](#1-服务器准备)
 - [2. Cloudflare 准备](#2-cloudflare-准备)
 - [3. 1Panel 准备](#3-1panel-准备)
@@ -27,24 +27,55 @@
 
 ---
 
-## 0. 开跑之前：准备清单
+## 0. 这些材料分别从哪来
 
-| # | 要准备的东西 | 必需 | 从哪来 | 花多久 |
+先把「东西从哪买/从哪拿」说清楚，后面每一节再讲具体怎么配。
+
+| # | 材料 | 从哪来 | 怎么拿 | 费用 |
 |---|---|---|---|---|
-| 1 | 一台服务器（root） | ✅ | 云厂商 | — |
-| 2 | 一个域名，NS 指向 Cloudflare | ✅ | 域名商 + Cloudflare | 10 分钟 |
-| 3 | Cloudflare API Token | ✅ | Cloudflare 后台 | 2 分钟 |
-| 4 | 1Panel（装好并初始化） | 推荐 | 官网一键脚本 | 5 分钟 |
-| 5 | 1Panel 里装 OpenResty | 用 1Panel 时必需 | 应用商店 | 3 分钟 |
-| 6 | 云安全组放行端口 | ✅ | 云厂商控制台 | 2 分钟 |
-| 7 | 证书邮箱 | 可选 | 随意 | — |
+| 1 | 服务器 | 云厂商（某云厂商 / Vultr / 阿里云…） | 下单后邮件里给 IP、root 密码、SSH 端口 | 按配置 |
+| 2 | 域名 | 域名商（Cloudflare Registrar / Namesilo / 阿里云…） | 买完在域名商后台能看到 | ~¥50/年 |
+| 3 | Cloudflare 账号 | <https://dash.cloudflare.com/sign-up> | 邮箱注册，免费 | 免费 |
+| 4 | Cloudflare API Token | Cloudflare 后台 | **第 2.4 节，12 步** | 免费 |
+| 5 | 1Panel | 官网一键脚本 | 第 3.1 节，一条命令 | 免费 |
+| 6 | OpenResty | 1Panel 应用商店 | 第 3.2 节，点安装 | 免费 |
+| 7 | 证书 | **脚本自动申请** | 不用准备，给个邮箱即可 | 免费 |
 
-**最容易漏的是 6**。很多 VPS 默认只开 SSH 端口，80/443 全封，
-表现是「脚本自检全过，但公网访问 522」。
+> 也就是说：你真正要**手动去搞**的只有 4 样——
+> 买服务器、买域名、注册 Cloudflare、创建 API Token。
+> 剩下的脚本和 1Panel 都能一条命令/点几下搞定。
+
+### 0.1 最短路径清单
+
+```
+□ 1. 买服务器，记下 IP / root 密码 / SSH 端口
+□ 2. 买域名（或在已有域名商那里）
+□ 3. 注册 Cloudflare，把域名 NS 指过去（第 2 节）
+□ 4. 创建 API Token，复制 cfut_ 开头那串（第 2.4 节）
+□ 5. 云控制台放行 80/443/7881/3478 + UDP 段（第 1.3 节）
+□ 6. 装 1Panel + 装 OpenResty（第 3 节）
+□ 7. 跑脚本（第 4 节）
+□ 8. 回 1Panel 建 3 个站点、传证书、开 HTTPS（第 3.4~3.8 节）
+```
 
 ---
 
 ## 1. 服务器准备
+
+### 1.0 买完服务器先记下这三样
+
+下单成功后，云厂商一般会在邮件 / 控制台「实例详情」里给你：
+
+| 信息 | 长什么样 | 在哪找 |
+|---|---|---|
+| 公网 IP | `203.0.113.10` | 实例详情页 |
+| root 密码 | 一串随机字符 | 首次开通的邮件，或控制台「重置密码」 |
+| SSH 端口 | 大多 `22`，有些是 `2222` 这种 | 实例详情页 / 邮件 |
+
+> 非标准 SSH 端口很常见（省得被扫），登录时要加 `-p`：
+> ```bash
+> ssh -p 2222 root@203.0.113.10
+> ```
 
 ### 1.1 最低配置
 
@@ -87,49 +118,129 @@ ssh root@你的服务器IP
 
 ## 2. Cloudflare 准备
 
-### 2.1 把域名托管到 Cloudflare
+这一节全部在浏览器里完成，一共 4 件事：**注册 → 加站点 → 改 NS → 建 Token**。
 
-1. 登录 <https://dash.cloudflare.com> → **Add a site** → 输入域名 → 选 Free 套餐
-2. Cloudflare 给你两个 NS 地址（形如 `xxx.ns.cloudflare.com`）
-3. 回域名商后台，把 NS 改成这两个
-4. 等生效（通常 10 分钟～2 小时）：
+### 2.1 注册 Cloudflare 账号
+
+1. 打开 <https://dash.cloudflare.com/sign-up>
+2. 填邮箱 + 密码 → **Sign up**
+3. 去邮箱点验证链接
+
+> 已有账号直接 <https://dash.cloudflare.com> 登录。
+
+### 2.2 把域名添加进来
+
+1. 登录后点右上角 **Add a site**（或首页的 **+ Add a site**）
+2. 输入你的域名（**只要主域**，如 `example.com`，不要带 `www`、不要带 `https://`）
+3. 选套餐 → **Free** → **Continue**
+4. Cloudflare 会自动扫一遍现有 DNS 记录，直接 **Continue**
+5. 最后一步会给你**两个 NS 地址**，形如：
+
+   ```
+   aria.ns.cloudflare.com
+   bob.ns.cloudflare.com
+   ```
+
+   **把这两个地址复制下来**，下一步要用。
+
+### 2.3 去域名商改 NS（关键一步）
+
+打开你买域名的网站后台，找到「DNS 服务器 / Nameservers」设置，
+把原来的 NS 删掉，换成 Cloudflare 给的那两个。
+
+各家位置不同，常见路径：
+
+| 域名商 | 路径 |
+|---|---|
+| Cloudflare Registrar | 不用改，本身就是 CF |
+| Namesilo | My Account → Domain Manager → 域名 → **Change Nameservers** |
+| 阿里云 | 域名控制台 → 域名列表 → **DNS 修改** → 自定义 DNS |
+| 腾讯云 | 域名注册 → 我的域名 → **DNS 解析** → 修改 DNS 服务器 |
+| GoDaddy | My Products → DNS → **Nameservers** → Change |
+
+改完等生效（10 分钟 ~ 2 小时）。**验证方法**：
 
 ```bash
-dig NS 你的域名 +short
-# 输出里出现 *.ns.cloudflare.com 就说明生效了
+dig NS example.com +short
 ```
 
-### 2.2 创建 API Token（**必做**）
+输出里出现 `*.ns.cloudflare.com` 就说明生效了。没生效之前，
+Cloudflare 后台该域名会显示 **Pending Nameserver Update**。
 
-脚本要用它做两件事：**建 DNS 记录** + **申请证书（DNS-01 校验）**。
+> ⚠️ NS 没生效就去申请证书，会报「找不到 zone」。等它变 **Active** 再往下走。
 
-1. 右上角头像 → **My Profile** → 左侧 **API Tokens**
-2. 点 **Create Token** → 拉到底选 **Create Custom Token**
-3. 填：
+### 2.4 创建 API Token（重点，12 步）
 
-   | 字段 | 值 |
-   |---|---|
-   | Token name | `matrix-deploy` |
-   | Permissions | `Zone` → `DNS` → **Edit** |
-   | | `Zone` → `Zone` → **Read** |
-   | Zone Resources | `Include` → `Specific zone` → 你的域名 |
-   | TTL | 留空（永不过期） |
+脚本要用这个 Token 干两件事：**自动建 DNS 记录** + **申请证书（DNS-01 校验）**。
 
-4. **Continue to summary** → **Create Token**
-5. 复制那串 token（只显示一次），形如 `cfut_xxxxxxxx`
+**直达链接**：<https://dash.cloudflare.com/profile/api-tokens>
 
-> 少了 `Zone → Zone → Read` 会在申请证书时报「找不到 zone」。
->
-> 验证 token 是否可用：
-> ```bash
-> curl -s -H "Authorization: Bearer 你的token" \
->   "https://api.cloudflare.com/client/v4/zones?name=你的域名" | head -c 200
-> # success:true 就对了
-> ```
+也可以点：右上角头像 → **My Profile** → 左侧 **API Tokens**。
 
-### 2.3 脚本会自动建哪几条 DNS 记录
+#### 走模板（快，推荐）
 
-假设域名 `example.com`、网页前缀 `chat`：
+1. 页面右上角点 **Create Token**
+2. 模板列表里找到 **Edit zone DNS** → 点它右边的 **Use template**
+3. **Token name** 填 `matrix-deploy`
+4. 往下看 **Permissions**，模板已经填好两行，确认是：
+
+   | 组 | 资源 | 权限 |
+   |---|---|---|
+   | Zone | DNS | **Edit** |
+   | Zone | Zone | **Read** |
+
+   > 如果只有第一行，点 **+ Add more** 补上 `Zone → Zone → Read`。
+   > 少了这行，建 DNS 能成功，但**申请证书会失败**。
+
+5. **Zone Resources** 选：
+
+   ```
+   Include → Specific zone → example.com
+   ```
+
+6. **TTL** 留空（永不过期）；**Client IP Address Filtering** 留空
+7. 点 **Continue to summary**
+8. 核对一遍，点 **Create Token**
+9. 页面显示一串 `cfut_` 开头的字符串 —— **这就是 Token，只显示这一次**
+
+#### 或者走自定义（等价）
+
+1. **Create Token** → 拉到最下面 **Create Custom Token**
+2. Token name：`matrix-deploy`
+3. **Permissions** 手动加两行：
+
+   ```
+   Zone  →  DNS   →  Edit
+   Zone  →  Zone  →  Read
+   ```
+
+4. Zone Resources：`Include → Specific zone → example.com`
+5. **Continue to summary** → **Create Token** → 复制
+
+#### 复制完立刻验证
+
+```bash
+curl -s -H "Authorization: Bearer cfut_你复制的那串" \
+  "https://api.cloudflare.com/client/v4/user/tokens/verify"
+```
+
+返回里 `"status":"active"` 就对了。
+
+再验证能不能读到 zone：
+
+```bash
+curl -s -H "Authorization: Bearer cfut_你复制的那串" \
+  "https://api.cloudflare.com/client/v4/zones?name=example.com" | head -c 200
+```
+
+`"success":true` 且有 `"name":"example.com"` 才说明 Zone:Read 生效。
+
+> ❌ **不要用 Global API Key**（旧版那个 37 位十六进制串）。
+> 它的权限是整个账号，泄露等于账号被接管。脚本只认 API Token。
+
+### 2.5 脚本会建哪几条 DNS 记录
+
+跑脚本时会自动创建（已经存在且指向本机的会跳过）：
 
 | 记录 | 指向 | 代理状态 | 为什么 |
 |---|---|---|---|
@@ -137,22 +248,23 @@ dig NS 你的域名 +short
 | `chatapi.example.com` | 服务器 IP | **灰云（仅 DNS）** | 大文件上传不能被 CF 卡 100 MB |
 | `chatad.example.com` | 服务器 IP | **橙云（已代理）** | 管理后台走 CF |
 
-三条都是**一级子域**，所以一张 `*.example.com` 通配符证书就能全覆盖。
+三条都是一级子域，一张 `*.example.com` 通配符证书就能全覆盖。
 
-> ⚠️ **`chatapi` 必须是灰云**。走橙云的话 Cloudflare 免费版会把请求体
-> 限制在 100 MB，「无限上传」就废了。
+**橙云 vs 灰云在哪改**：Cloudflare → 你的域名 → **DNS** → **Records**，
+点那条记录右侧的橙色云朵图标即可切换（橙色=已代理，灰色=仅 DNS）。
+
+> ⚠️ **`chatapi` 必须是灰云**。橙云状态下 Cloudflare 免费版会把
+> 请求体限制在 100 MB，「无限上传」就废了。
 >
-> 想全部走灰云：加 `--no-proxy-web`。
+> 想三个都灰云：脚本加 `--no-proxy-web`。
 
-### 2.4 证书模式（先知道，不用改）
+### 2.6 证书模式（了解即可，不用改）
 
-脚本申请的是 **Let's Encrypt 正式证书**，所以 Cloudflare 里：
+脚本申请的是 **Let's Encrypt 正式证书**（不是 Cloudflare 的源站证书），所以：
 
-- SSL/TLS 模式设成 **Full (strict)** 是安全的
-- 不需要 Cloudflare 的「源服务器证书」
-
-如果你更想让 Cloudflare 自动管证书，那就把 `chat`/`chatad` 也设灰云，
-用 `--no-proxy-web`，但会失去 CF 的防护和加速。
+- Cloudflare → SSL/TLS → Overview 设成 **Full (strict)** 是安全的
+- 无需在 Cloudflare 里上传任何证书
+- 证书到期前 acme.sh 会自动续（第 5 节有同步钩子）
 
 ---
 
@@ -161,6 +273,9 @@ dig NS 你的域名 +short
 > 不想用 1Panel？跳到 [3.9](#39-不用-1panel-的话)。
 
 ### 3.1 安装 1Panel
+
+1Panel 是开源的服务器面板，官网 <https://1panel.cn>，一键安装脚本来自它的官方 CDN。
+在服务器上以 root 执行：
 
 ```bash
 bash -c "$(curl -sSL https://resource.fit2cloud.com/1panel/package/v2/quick_start.sh)"
